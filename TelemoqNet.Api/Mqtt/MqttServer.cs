@@ -33,6 +33,11 @@ public sealed class MqttServer(
         var listener = new TcpListener(IPAddress.Any, _options.Port);
         listener.Start();
         logger.LogInformation("MQTT honeypot listening on port {Port}", _options.Port);
+        var sysPublisher = new SysTopicPublisher(
+            hub,
+            _options,
+            loggerFactory.CreateLogger<SysTopicPublisher>());
+        var sysTask = sysPublisher.RunAsync(cancellationToken);
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -80,6 +85,13 @@ public sealed class MqttServer(
             listener.Stop();
             clientTasks = _sessions.ToArray();
             await Task.WhenAll(clientTasks);
+            try
+            {
+                await sysTask;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
         }
     }
 

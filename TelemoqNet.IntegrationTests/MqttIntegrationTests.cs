@@ -33,6 +33,24 @@ public sealed class MqttIntegrationTests
     }
 
     [Fact]
+    public async Task SysTopics_ArePublishedRetainedAndRouted()
+    {
+        await using var fixture = await MqttFixture.StartAsync(options => options.SysIntervalSeconds = 1);
+        await using var client = await fixture.ConnectAsync();
+
+        await client.SendAsync(ConnectPacket("sys-client", 4));
+        Assert.Equal(0, (await client.ReadPacketAsync()).Body[1]);
+        await client.SendAsync(SubscribePacket(1, "$SYS/#"));
+        Assert.Equal(9, (await client.ReadPacketAsync()).Type);
+
+        var packet = await client.ReadPacketAsync(4000);
+        Assert.Equal(3, packet.Type);
+        Assert.True((packet.Flags & 1) == 1);
+        Assert.Equal("$SYS/broker/version", ReadTopic(packet.Body.AsSpan()));
+        Assert.Equal("TelemoqNet MQTT Broker", Encoding.UTF8.GetString(packet.Body[21..]));
+    }
+
+    [Fact]
     public async Task ConnectPingAndDisconnect_AreCaptured()
     {
         await using var fixture = await MqttFixture.StartAsync();
@@ -175,7 +193,7 @@ internal sealed class MqttFixture : IAsyncDisposable
     public ConcurrentBag<HoneypotSession> Sessions { get; }
     public ConcurrentBag<string> Logs { get; private set; } = [];
 
-    public static Task<MqttFixture> StartAsync()
+    public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null)
     {
         var options = new MqttOptions
         {
@@ -184,6 +202,7 @@ internal sealed class MqttFixture : IAsyncDisposable
             MaxSessionLifetimeSeconds = 30,
             OutboundQueueLength = 16
         };
+        configure?.Invoke(options);
         var store = new CapturingSessionStore();
         var loggerProvider = new CapturingLoggerProvider();
         var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
@@ -272,14 +291,14 @@ internal sealed class MqttClient : IAsyncDisposable
 
     public Task SendAsync(byte[] packet) => _stream.WriteAsync(packet).AsTask();
 
-    public async Task<(byte Type, byte[] Body)> ReadPacketAsync(int timeoutMilliseconds = 5000)
+    public async Task<(byte Type, byte Flags, byte[] Body)> ReadPacketAsync(int timeoutMilliseconds = 5000)
     {
         using var timeout = new CancellationTokenSource(timeoutMilliseconds);
         var header = new byte[2];
         await ReadExactlyAsync(header, timeout.Token);
         var body = new byte[header[1]];
         await ReadExactlyAsync(body, timeout.Token);
-        return ((byte)(header[0] >> 4), body);
+        return ((byte)(header[0] >> 4), (byte)(header[0] & 0x0f), body);
     }
 
     public async Task ExpectClosedAsync()

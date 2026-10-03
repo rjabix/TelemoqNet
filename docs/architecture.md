@@ -36,6 +36,7 @@ Worker
               └── BrokerHub
                     ├── topic-filter matching
                     ├── retained message store
+                    ├── `$SYS` telemetry counters
                     └── bounded per-session outbound channels
 ```
 
@@ -97,6 +98,12 @@ and MQTT 5 DISCONNECT.
 `TopicFilter` implements exact topic levels, `+`, and terminal `#`. Leading
 wildcards do not match `$`-prefixed topics. A publish is delivered only to
 matching active sessions; no external broker or network is contacted.
+
+`SysTopicPublisher` publishes retained broker telemetry at
+`Honeypot:Mqtt:SysIntervalSeconds`. It exposes version, monotonic uptime,
+connected and total clients, message counts, and byte counts under
+`$SYS/broker/...`. Explicit `$SYS/#` subscriptions receive these messages;
+ordinary `#` subscriptions do not.
 
 Each session receives through a bounded channel. A slow or non-reading client
 cannot make the broker allocate unbounded outbound memory or block unrelated

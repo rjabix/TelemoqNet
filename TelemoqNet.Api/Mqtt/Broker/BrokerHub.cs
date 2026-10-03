@@ -11,8 +11,24 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     private readonly MqttOptions _options = options.Value;
     private readonly ConcurrentDictionary<MqttSession, List<Subscription>> _subscriptions = new();
     private readonly ConcurrentDictionary<string, (string Topic, byte[] Payload)> _retained = new();
+    private long _totalConnections;
+    private long _messagesReceived;
+    private long _messagesSent;
+    private long _bytesReceived;
+    private long _bytesSent;
 
-    public void Register(MqttSession session) => _subscriptions[session] = [];
+    public int ConnectedClients => _subscriptions.Count;
+    public long TotalConnections => Interlocked.Read(ref _totalConnections);
+    public long MessagesReceived => Interlocked.Read(ref _messagesReceived);
+    public long MessagesSent => Interlocked.Read(ref _messagesSent);
+    public long BytesReceived => Interlocked.Read(ref _bytesReceived);
+    public long BytesSent => Interlocked.Read(ref _bytesSent);
+
+    public void Register(MqttSession session)
+    {
+        _subscriptions[session] = [];
+        Interlocked.Increment(ref _totalConnections);
+    }
     public void Remove(MqttSession session) => _subscriptions.TryRemove(session, out _);
 
     public IReadOnlyList<(string Topic, byte[] Payload)> Subscribe(MqttSession session, IEnumerable<Subscription> subscriptions)
@@ -40,6 +56,19 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
 
     public void Publish(MqttSession sender, string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
     {
+        Interlocked.Increment(ref _messagesReceived);
+        Interlocked.Add(ref _bytesReceived, payload.Length);
+        PublishToSubscribers(topic, payload, qos, retain);
+    }
+
+    public void PublishSystem(string topic, ReadOnlyMemory<byte> payload)
+    {
+        _retained[topic] = (topic, payload.ToArray());
+        PublishToSubscribers(topic, payload, 0, true);
+    }
+
+    private void PublishToSubscribers(string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
+    {
         if (retain && payload.Length == 0) _retained.TryRemove(topic, out _);
         else if (retain) _retained[topic] = (topic, payload.ToArray());
 
@@ -49,7 +78,11 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
             lock (subscriptions)
             {
                 foreach (var subscription in subscriptions.Where(x => TopicFilter.Matches(x.Filter, topic)))
-                    pair.Key.Enqueue(MqttPacketWriter.Publish(topic, payload.Span, Math.Min(qos, subscription.Qos), false));
+                {
+                    pair.Key.Enqueue(MqttPacketWriter.Publish(topic, payload.Span, Math.Min(qos, subscription.Qos), retain));
+                    Interlocked.Increment(ref _messagesSent);
+                    Interlocked.Add(ref _bytesSent, payload.Length);
+                }
             }
         }
     }
