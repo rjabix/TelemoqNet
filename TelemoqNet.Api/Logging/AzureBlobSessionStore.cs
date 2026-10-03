@@ -7,6 +7,8 @@ public sealed class AzureBlobSessionStore : ISessionStore
 {
     private readonly BlobContainerClient _container;
     private readonly ILogger<AzureBlobSessionStore> _logger;
+    private readonly SemaphoreSlim _containerInitialization = new(1, 1);
+    private bool _containerCreated;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -40,8 +42,22 @@ public sealed class AzureBlobSessionStore : ISessionStore
         HoneypotSession session,
         CancellationToken cancellationToken)
     {
-        await _container.CreateIfNotExistsAsync(
-            cancellationToken: cancellationToken);
+        if (!_containerCreated)
+        {
+            await _containerInitialization.WaitAsync(cancellationToken);
+            try
+            {
+                if (!_containerCreated)
+                {
+                    await _container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+                    _containerCreated = true;
+                }
+            }
+            finally
+            {
+                _containerInitialization.Release();
+            }
+        }
 
         var date = session.StartedAt.UtcDateTime;
 

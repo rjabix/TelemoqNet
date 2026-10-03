@@ -7,7 +7,7 @@ using TelemoqNet.Api.Logging;
 
 namespace TelemoqNet.Api.Telnet;
 
-public sealed class TelnetServer
+public sealed class TelnetServer : IProtocolServer
 {
     private readonly HoneypotOptions _options;
     private readonly IDeviceProfileFactory _profileFactory;
@@ -61,6 +61,7 @@ public sealed class TelnetServer
                     lock (_taskLock) _clientTasks.Remove(completed);
                 }, TaskScheduler.Default);
             }
+
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -74,6 +75,8 @@ public sealed class TelnetServer
             await Task.WhenAll(tasks);
         }
     }
+
+    public string Name => "Telnet";
 
     private async Task HandleClientAsync(
         TcpClient client,

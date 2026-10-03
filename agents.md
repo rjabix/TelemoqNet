@@ -3,8 +3,9 @@
 ## Project purpose
 
 TelemoqNet is a honeypot that simulates an IoT device and records attacker
-interactions. The current implementation exposes a partially implemented
-Telnet service. MQTT is planned but is not implemented yet.
+interactions. The current implementation exposes bounded Telnet and plaintext MQTT honeypot
+services. Both protocols record attacker interactions without executing commands
+or making outbound network requests.
 
 The project is intentionally deceptive, but it must remain isolated and safe:
 device behavior is simulated, credentials are fake examples, and commands must
@@ -28,6 +29,11 @@ TelemoqNet.Api/
     TelnetProtocol.cs                Telnet command and option constants
     TelnetServer.cs                  TCP listener, limits, and timeouts
     TelnetSession.cs                 Negotiation, login, shell, and capture flow
+  Mqtt/
+    MqttServer.cs                   Bounded MQTT listener and connection limits
+    MqttSession.cs                  MQTT state machine and event capture
+    Broker/                         In-memory topic routing and wildcard matching
+    Protocol/                       Bounded MQTT packet reader and writer
   Logging/
     HoneypotSession.cs               Session and event data model
     ISessionStore.cs                 Session persistence abstraction
@@ -44,8 +50,9 @@ TelemoqNet.Api/
 
 1. `Program.cs` builds the generic host, binds the `Honeypot` configuration
    section, registers the fake device and session store, and starts `Worker`.
-2. `Worker` runs `TelnetServer.RunAsync` until the host cancellation token is
-   signaled.
+2. `Worker` supervises the registered protocol servers until the host
+   cancellation token is signaled. A failing protocol loop is restarted without
+   stopping the other protocol.
 3. `TelnetServer` listens on `Honeypot:TelnetPort`, limits concurrent clients
    with `Honeypot:MaxConnections`, and applies
    `Honeypot:SessionTimeoutSeconds` per connection.
@@ -60,6 +67,9 @@ TelemoqNet.Api/
    sessions as JSON under `yyyy/MM/dd/{SessionId}.json`.
    Application Insights/Azure Monitor telemetry follows the same environment
    boundary and is not registered locally.
+7. MQTT listens on plaintext port 1883 when enabled, accepts protocol levels
+   3, 4, and 5, routes simulated and attacker messages only in process, and
+   stores no attacker state across restarts.
 
 ## Configuration and local operation
 
@@ -76,6 +86,11 @@ The project targets `net10.0`. The main settings are:
 | `AzureStorage:ConnectionString` | Required Blob Storage credential | unset |
 | `AzureStorage:Container` | Session container name | `honeypot-sessions` |
 | `LocalStorage:CsvPath` | Optional local session CSV path | `data/honeypot-sessions.csv` |
+| `Honeypot:Mqtt:Enabled` | Enable the bounded plaintext MQTT listener | `true` |
+| `Honeypot:Mqtt:Port` | MQTT listener port | `1883` |
+| `Honeypot:Mqtt:MaxConnections` | Global MQTT connection cap | `100` |
+| `Honeypot:Mqtt:MaxConnectionsPerIp` | Per-source MQTT connection cap | `10` |
+| `Honeypot:Mqtt:MaxPacketSize` | Maximum MQTT packet body | `65536` |
 
 Do not put connection strings or other secrets in tracked JSON files. Use .NET
 user secrets, environment variables, or an external secret provider. The
@@ -120,25 +135,23 @@ capture, emulator behavior, or persistence.
 - Do not commit generated output, local IDE state, credentials, or captured
   attacker data.
 
-## Planned MQTT support
+## MQTT implementation decisions
 
-MQTT should be added as another protocol surface, not folded into the Telnet
-classes. A future implementation should have its own listener/session or
-connection layer and use shared abstractions for device emulation and session
-storage where the event model fits.
-
-Before implementing MQTT, decide and document:
-
-- broker port(s), TLS behavior, and connection limits;
-- authentication and topic/subscription simulation;
-- packet-size, keep-alive, and per-client timeout limits;
-- how MQTT events map into `HoneypotSession` or a versioned event model;
-- whether the broker is a deliberately limited simulator or a standards-level
-  implementation.
-
-Do not use a real MQTT broker configuration that can bridge, publish to, or
-subscribe from external production systems. Keep the simulated broker
-self-contained and ensure malformed packets cannot crash the worker.
+- Plaintext 1883 only; TLS/8883, WebSockets, MQTT-SN, bridging, and outbound
+  connections are out of scope.
+- The broker uses a hand-written bounded codec and session layer rather than a
+  broker library. Protocol levels 3 (`MQIsdp`), 4, and 5 are accepted.
+- Anonymous access is enabled by default; optional `username:password`
+  credentials can be configured. Passwords are never written to Information
+  logs.
+- MQTT uses one coherent SmartHome profile and records one
+  `HoneypotSession` per TCP connection with `Protocol = "mqtt"` and unchanged
+  schema version 2.
+- Attacker publishes are routed only to matching in-process sessions. Retained
+  state is bounded and is not persisted across restarts.
+- Packet, connection, subscription, and event limits are configuration-backed
+  and validated at startup. The service must remain self-contained and must
+  never execute or interpret attacker payloads.
 
 ## Emulated BusyBox command surface
 
