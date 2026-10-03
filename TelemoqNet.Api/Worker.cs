@@ -5,10 +5,12 @@ namespace TelemoqNet.Api;
 public class Worker : BackgroundService
 {
     private readonly IEnumerable<IProtocolServer> _servers;
+    private readonly ILogger<Worker> _logger;
 
-    public Worker(IEnumerable<IProtocolServer> servers)
+    public Worker(IEnumerable<IProtocolServer> servers, ILogger<Worker> logger)
     {
         _servers = servers;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(
@@ -18,13 +20,17 @@ public class Worker : BackgroundService
         await Task.WhenAll(tasks);
     }
 
-    private static async Task RunServerAsync(IProtocolServer server, CancellationToken token)
+    private async Task RunServerAsync(IProtocolServer server, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             try { await server.RunAsync(token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-            catch { await Task.Delay(TimeSpan.FromSeconds(1), token); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{ProtocolServer} stopped unexpectedly; restarting", server.Name);
+                await Task.Delay(TimeSpan.FromSeconds(1), token);
+            }
         }
     }
 }

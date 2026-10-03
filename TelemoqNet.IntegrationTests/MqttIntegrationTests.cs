@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TelemoqNet.Api.Configuration;
@@ -14,6 +15,23 @@ namespace TelemoqNet.IntegrationTests;
 
 public sealed class MqttIntegrationTests
 {
+    [Fact]
+    public void ProductionConfiguration_BindsMqttAndPassesValidation()
+    {
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+        var options = new MqttOptions();
+        configuration.GetSection("Honeypot:Mqtt").Bind(options);
+
+        var validation = new MqttOptionsValidator().Validate(null, options);
+
+        Assert.True(options.Enabled);
+        Assert.Equal(1883, options.Port);
+        Assert.True(validation.Succeeded, string.Join(Environment.NewLine, validation.Failures ?? []));
+    }
+
     [Fact]
     public async Task ConnectPingAndDisconnect_AreCaptured()
     {

@@ -58,6 +58,9 @@ public sealed class MqttServer(
                 var slotAcquired = await _limiter.WaitAsync(0, cancellationToken);
                 if (!slotAcquired || !TryAcquireIp(key))
                 {
+                    logger.LogWarning(
+                        "Rejected MQTT connection from {RemoteAddress}; global or per-IP limit reached",
+                        key);
                     client.Dispose();
                     if (slotAcquired) _limiter.Release();
                     continue;

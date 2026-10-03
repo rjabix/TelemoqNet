@@ -73,6 +73,10 @@ public sealed class MqttSession : IAsyncDisposable
                 {
                     AddEvent("protocol.error", result.Error);
                     _session.DisconnectReason = result.Error;
+                    _logger.LogWarning(
+                        "MQTT protocol error in session {SessionId}: {Error}",
+                        _session.SessionId,
+                        result.Error);
                     break;
                 }
 
@@ -111,6 +115,10 @@ public sealed class MqttSession : IAsyncDisposable
             {
                 _logger.LogError(ex, "Failed to store MQTT session {SessionId}", _session.SessionId);
             }
+            _logger.LogInformation(
+                "MQTT session {SessionId} closed: {DisconnectReason}",
+                _session.SessionId,
+                _session.DisconnectReason);
         }
     }
 

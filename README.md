@@ -5,6 +5,10 @@ plaintext MQTT services. It records attacker interactions locally or in Azure
 Blob Storage, never executes received commands, and never makes outbound
 connections on behalf of an attacker.
 
+See [docs/architecture.md](docs/architecture.md) for the runtime architecture,
+MQTT component boundaries, packet flow, safety controls, persistence model, and
+test strategy.
+
 ## Local operation
 
 The worker targets .NET 10. Restore and build the solution, then run:
@@ -12,7 +16,8 @@ The worker targets .NET 10. Restore and build the solution, then run:
 ```bash
 dotnet restore TelemoqNet.slnx
 dotnet build TelemoqNet.slnx
-dotnet run --project TelemoqNet.Api/TelemoqNet.Api.csproj
+DOTNET_ENVIRONMENT=Development \
+  dotnet run --project TelemoqNet.Api/TelemoqNet.Api.csproj
 ```
 
 Telnet listens on port `2323` and MQTT listens on port `1883` by default.
