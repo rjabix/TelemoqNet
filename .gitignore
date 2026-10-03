@@ -1,0 +1,10 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+data/
+.idea/
+plans/
+.DS_Store
+TelemoqNet.sln.DotSettings.user

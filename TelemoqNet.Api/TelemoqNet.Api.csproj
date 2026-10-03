@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UserSecretsId>dotnet-TelemoqNet.Api-dafe0896-0221-4710-bb44-1e383ceaba52</UserSecretsId>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2" />
+        <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="3.1.2" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="data\" />
+    </ItemGroup>
+</Project>

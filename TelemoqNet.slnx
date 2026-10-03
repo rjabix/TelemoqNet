@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="TelemoqNet.Api/TelemoqNet.Api.csproj" />
+  <Project Path="TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj" />
+</Solution>
