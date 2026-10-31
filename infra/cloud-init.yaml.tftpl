@@ -43,6 +43,7 @@ write_files:
         -e AZURE_CLIENT_ID="$CLIENT_ID" \
         -e AzureStorage__AccountUrl="${blob_endpoint}" \
         -e AzureStorage__Container="${container_name}" \
+        -e APPLICATIONINSIGHTS_CONNECTION_STRING="${app_insights_connection_string}" \
         "$IMAGE"
       docker logout "$ACR.azurecr.io"
 

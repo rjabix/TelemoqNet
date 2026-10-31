@@ -3,3 +3,4 @@ github_repo          = "owner/TelemoqNet"
 admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
 # location               = "westeurope"
 # allow_bootstrap_egress = true
+# log_reader_principal_id = "00000000-0000-0000-0000-000000000000"

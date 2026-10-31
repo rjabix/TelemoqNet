@@ -21,7 +21,7 @@ public sealed class AzureBlobSessionStore : ISessionStore
     {
         _logger = logger;
 
-        var blobUriValue = configuration["AzureStorage:BlobUri"];
+        var blobUriValue = configuration["AzureStorage:AccountUrl"];
 
         var containerName =
             configuration["AzureStorage:Container"] ?? "honeypot-sessions";
@@ -29,7 +29,7 @@ public sealed class AzureBlobSessionStore : ISessionStore
         if (!Uri.TryCreate(blobUriValue, UriKind.Absolute, out var blobUri))
         {
             throw new InvalidOperationException(
-                "AzureStorage:BlobUri must be configured as an absolute URI.");
+                "AzureStorage:AccountUrl must be configured as an absolute URI.");
         }
 
         var service = new BlobServiceClient(

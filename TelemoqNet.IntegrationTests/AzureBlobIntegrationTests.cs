@@ -36,7 +36,7 @@ public sealed class AzureBlobIntegrationTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["AzureStorage:BlobUri"] = blobUri,
+                ["AzureStorage:AccountUrl"] = blobUri,
                 ["AzureStorage:Container"] = containerName
             })
             .Build();

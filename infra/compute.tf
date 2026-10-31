@@ -55,11 +55,12 @@ resource "azurerm_linux_virtual_machine" "honeypot" {
   }
 
   custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    acr_name         = azurerm_container_registry.main.name
-    acr_login_server = azurerm_container_registry.main.login_server
-    vm_client_id     = azurerm_user_assigned_identity.vm.client_id
-    blob_endpoint    = azurerm_storage_account.logs.primary_blob_endpoint
-    container_name   = var.container_name
+    acr_name                       = azurerm_container_registry.main.name
+    acr_login_server               = azurerm_container_registry.main.login_server
+    vm_client_id                   = azurerm_user_assigned_identity.vm.client_id
+    blob_endpoint                  = azurerm_storage_account.logs.primary_blob_endpoint
+    container_name                 = var.container_name
+    app_insights_connection_string = azurerm_application_insights.main.connection_string
   }))
 
   tags = local.tags

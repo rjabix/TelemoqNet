@@ -1,0 +1,53 @@
+name: Build and deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag, normally the commit SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      VM_NAME: ${{ vars.VM_NAME }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to ACR
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          docker build --file TelemoqNet.Api/Dockerfile \
+            --tag "$ACR_LOGIN_SERVER/telemoqnet:$IMAGE_TAG" .
+          docker push "$ACR_LOGIN_SERVER/telemoqnet:$IMAGE_TAG"
+
+      - name: Deploy image to VM
+        run: |
+          set -euo pipefail
+          az vm run-command invoke \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$VM_NAME" \
+            --command-id RunShellScript \
+            --scripts "/opt/honeypot/deploy.sh $IMAGE_TAG"

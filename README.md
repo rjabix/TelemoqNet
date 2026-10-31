@@ -1,86 +1,188 @@
 # TelemoqNet
 
-TelemoqNet is a deliberately bounded IoT honeypot that simulates Telnet and
-plaintext MQTT services. It records attacker interactions locally or in Azure
-Blob Storage, never executes received commands, and never makes outbound
-connections on behalf of an attacker.
+TelemoqNet is an IoT honeypot written in .NET 10. It pretends to be a small BusyBox/Linux
+device, lets attackers "log in", and records everything they do (login attempts, commands,
+timing, source address) for later analysis. Nothing an attacker types is ever executed:
+all device behaviour is simulated in memory and attacker input never causes application-initiated
+connections. Production telemetry is sent to the provisioned Application Insights resource.
 
-See [docs/architecture.md](docs/architecture.md) for the runtime architecture,
-MQTT component boundaries, packet flow, safety controls, persistence model, and
-test strategy.
-For thesis preparation, [requirements-traceability.md](docs/requirements-traceability.md)
-maps requirements to implementation and tests,
-[security-and-isolation.md](docs/security-and-isolation.md) documents the
-threat model and safety boundaries, and
-[evaluation-protocol.md](docs/evaluation-protocol.md) defines a reproducible
-non-cloud evaluation.
+Status:
 
-## Local operation
+| Protocol | State |
+| --- | --- |
+| Telnet | Implemented (default port 2323) |
+| MQTT | Implemented (default port 1883) |
 
-The worker targets .NET 10. Restore and build the solution, then run:
+## How it works
+
+1. A listener accepts TCP connections (limited by `Honeypot:MaxConnections`).
+2. The Telnet session negotiates options, asks for a login and, if the credentials match the
+   configured fake list, starts a simulated shell.
+3. Each connection becomes one `HoneypotSession` (logins, commands, ordered events).
+4. The session is saved when the connection ends:
+   - `Development` / `Local` environment: appended to `data/honeypot-sessions.csv`.
+   - Any other environment: one JSON blob per session in Azure Blob Storage,
+     under `yyyy/MM/dd/{SessionId}.json`.
+
+See `agents.md` for the code layout and change guidelines.
+
+For the complete Azure and GitHub OIDC setup, see
+[docs/azure-github-deployment.md](docs/azure-github-deployment.md).
+
+## Run locally
 
 ```bash
 dotnet restore TelemoqNet.slnx
 dotnet build TelemoqNet.slnx
-DOTNET_ENVIRONMENT=Development \
-  dotnet run --project TelemoqNet.Api/TelemoqNet.Api.csproj
+dotnet run --project TelemoqNet.Api/TelemoqNet.Api.csproj   # Development: CSV storage
 ```
 
-Telnet listens on port `2323` and MQTT listens on port `1883` by default.
-MQTT is a bounded, plaintext simulator accepting protocol levels 3, 4, and 5.
-Set `Honeypot:Mqtt:Enabled` to `false` to disable it.
-
-Deploy exposed instances with egress denied, no host filesystem mounts, and
-container CPU, memory, and process limits. Supply Azure credentials through
-environment variables, user secrets, or an external secret provider; never
-place connection strings in tracked JSON.
-
-## Testing
-
-Run the existing Telnet and MQTT integration tests with:
+Connect with `telnet localhost 2323` (or `nc localhost 2323`). The default fake logins are in
+`TelemoqNet.Api/appsettings.json`. Run the tests with:
 
 ```bash
 dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj
 ```
 
-The integration tests start the real TCP listeners on ephemeral loopback ports,
-send MQTT wire packets directly, and use an in-memory session store. This keeps
-the tests deterministic and verifies the honeypot itself without requiring
-Docker or a real broker. TestContainers is intentionally not required for the
-core suite: a Mosquitto container is useful for optional golden-transcript or
-compatibility tests, but it must not be part of the normal offline test run.
+## Configuration
 
-For a manual smoke test, start the worker and use any MQTT client:
+Settings live in `TelemoqNet.Api/appsettings.json` and can be overridden with environment
+variables, using `__` for nesting (for example `Honeypot__TelnetPort=2323`).
 
-```bash
-mosquitto_sub -h 127.0.0.1 -p 1883 -t 'home/test' -v
-mosquitto_pub -h 127.0.0.1 -p 1883 -t 'home/test' -m 'hello'
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `Honeypot:TelnetPort` | TCP port the app listens on | `2323` |
+| `Honeypot:MaxConnections` | Concurrent session limit | `100` |
+| `Honeypot:SessionTimeoutSeconds` | Per-session timeout | `300` |
+| `Honeypot:MaxAuthenticationAttempts` | Login attempts per session | `3` |
+| `Honeypot:CapturePasswords` | Store attempted passwords in the session | `false` |
+| `Honeypot:Credentials` | Fake `user:password` pairs that log in | see file |
+| `AzureStorage:Container` | Blob container for sessions | `honeypot-sessions` |
+| `AzureStorage:AccountUrl` | Blob account endpoint used with the managed identity | unset |
+| `LocalStorage:CsvPath` | CSV path in Development | `data/honeypot-sessions.csv` |
+
+Never put secrets in tracked JSON. Use user secrets or environment variables.
+
+## Cloud structure (Azure)
+
+The infrastructure is defined with Terraform in `infra/` and lives in its own dedicated
+Azure subscription, separate from anything else you run.
+
+```mermaid
+flowchart LR
+  A[Attackers] -->|TCP 23, 2323, 1883| P[Public IP and NSG]
+  P --> V[Linux VM running the container]
+  V -->|private endpoint| S[(Blob Storage)]
+  V -->|Azure Monitor HTTPS| I[(Application Insights)]
+  G[GitHub Actions] -->|OIDC, push image| R[Container Registry]
+  R -->|pull with managed identity| V
 ```
 
-The broker accepts anonymous MQTT 3.x/4/5 connections by default. The
-`Honeypot:Mqtt:Enabled`, port, connection limits, and packet limit can be
-overridden with environment variables such as
-`Honeypot__Mqtt__Port=1884`.
+| Resource | Role |
+| --- | --- |
+| Resource group, VNet `10.50.0.0/24` | One honeypot subnet and one private-endpoint subnet |
+| NSG | Inbound only TCP 23, 2323, 1883. Outbound denied except Azure Monitor (plus a temporary bootstrap rule) |
+| Static public IP | The address attackers see |
+| Linux VM (Ubuntu 24.04) | Runs the honeypot container with Docker; port 23 and 2323 map to the app's 2323, 1883 to 1883 |
+| User-assigned identity (VM) | Pulls images and writes session blobs, nothing else |
+| Container Registry (Premium) | Holds one image per release; the VM pulls through an ACR private endpoint |
+| Storage account | No public access, no shared keys, reached through a Blob private endpoint |
+| Log Analytics + Application Insights | Production application logs and telemetry; VM egress is limited to the Azure Monitor service tag |
+| Custom role "log writer" | Write-only on the sessions container: cannot read, list or delete |
+| GitHub identity + federated credential | Lets the `prod` GitHub environment push images and run commands on this one VM, with no stored secrets |
 
-When anonymous MQTT access is disabled, configure credentials as
-`Honeypot__Mqtt__Credentials__0=sensor:secret` (prefer an external secret
-provider in exposed environments). MQTT publish events store only bounded
-metadata and an optional Base64 payload sample; payloads are never executed or
-sent to external systems.
+There is no inbound SSH. The VM is managed with `az vm run-command` only.
 
-The Azure Blob integration test is opt-in. It uses `DefaultAzureCredential`,
-so provide `AZURE_STORAGE_BLOB_URI` and authenticate with Azure CLI, a managed
-identity, or another supported credential. The target storage account and
-`integration-sessions` container must already be provisioned:
+## Deploy
+
+> **Do not deploy yet.** Terraform still needs a subscription-backed `plan` review. The steps
+> below are the intended deployment flow.
+
+Prerequisites: a dedicated Azure subscription, Azure CLI, Terraform 1.9 or newer, Docker, and
+this repository on GitHub.
+
+### 1. Provision the infrastructure
 
 ```bash
-AZURE_STORAGE_BLOB_URI=https://<account>.blob.core.windows.net \
-  dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj \
-  --filter FullyQualifiedName~AzureBlobIntegrationTests
+az login
+az account set --subscription <honeypot-subscription-id>
+cd infra
+cp terraform.tfvars.example terraform.tfvars    # fill in subscription, repo, SSH public key
+terraform init
+terraform validate
+terraform plan
+terraform apply
 ```
 
-The application requires the same endpoint through
-`AzureStorage:BlobUri`/`AzureStorage__BlobUri`. It never creates the container;
-container provisioning and role assignment are infrastructure responsibilities.
-Without `AZURE_STORAGE_BLOB_URI`, the optional test returns and the normal
-offline test suite remains deterministic.
+Keep `allow_bootstrap_egress = true` (the default) for this first apply so the VM can install
+Docker on first boot. Note the outputs: `acr_name`, `acr_login_server`, `public_ip`, `vm_name`,
+`resource_group`, `github_client_id`, `tenant_id`.
+
+### 2. Wait for first boot, then close the bootstrap egress
+
+```bash
+az vm run-command invoke -g <resource_group> -n <vm_name> \
+  --command-id RunShellScript --scripts "cloud-init status --wait"
+```
+
+Then set `allow_bootstrap_egress = false` in `terraform.tfvars` and run `terraform apply` again.
+This removes the VM's general outbound internet access.
+
+### 3. Build and push the image
+
+```bash
+az acr login --name <registry-name>
+docker build -f TelemoqNet.Api/Dockerfile -t <acr_login_server>/telemoqnet:<tag> .
+docker push <acr_login_server>/telemoqnet:<tag>
+```
+
+Use the git commit SHA as the tag.
+
+### 4. Deploy to the VM
+
+```bash
+az vm run-command invoke -g <resource_group> -n <vm_name> \
+  --command-id RunShellScript --scripts "/opt/honeypot/deploy.sh <tag>"
+```
+
+`deploy.sh` signs in to the registry with the VM identity, pulls the image and restarts the
+container (read-only filesystem, all capabilities dropped, memory and process limits).
+
+### 5. Verify
+
+```bash
+az vm run-command invoke -g <resource_group> -n <vm_name> \
+  --command-id RunShellScript --scripts "docker ps; docker logs --tail 50 honeypot"
+telnet <public_ip> 23
+```
+
+Log in with one of the configured fake credentials, run a command, disconnect, and confirm a
+blob appears in the sessions container. The storage account has no public access, so reading
+logs requires `log_reader_principal_id` to be set for a read-only Entra assignment and a
+private-network path into the VNet.
+
+### Releasing and rolling back
+
+A new release is steps 3 and 4 with a new tag. A rollback is step 4 with a previous tag.
+Terraform is only needed when the infrastructure changes. The GitHub Actions workflow runs steps 3 and 4 from the `prod` environment behind a required approval,
+authenticating with the OIDC identity (`github_client_id`, `tenant_id` and the subscription
+ID go in as repository variables, not secrets).
+
+### Patching and teardown
+
+The VM has no general internet access, so OS updates need `allow_bootstrap_egress = true`
+temporarily (or a rebuilt VM). `terraform destroy` removes everything and stops the costs.
+Collected logs are deleted with the storage account, so export what you need first.
+
+## Known gaps
+
+- `terraform plan` still needs to be run against the target subscription.
+- A private-network access method for human log analysis (for example VPN or a controlled jump host)
+  is not provisioned by this module.
+
+## Safety and data
+
+- Run it only in the dedicated subscription, never in a work or shared one.
+- Source IP addresses are personal data under GDPR. Restrict access to the logs, set a
+  retention limit, and publish aggregates instead of raw addresses.
+- Do not commit credentials, captured attacker data, Terraform state or `terraform.tfvars`.

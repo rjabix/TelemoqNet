@@ -1,17 +1,23 @@
 # Honeypot infrastructure (Terraform, Azure)
 
-Status: drafted, **not yet validated**. Run `terraform fmt` and `terraform validate` first.
+Status: drafted. `terraform fmt` and `terraform validate` pass locally; run `terraform plan`
+against the target subscription before applying.
 
 ## What it creates
 
 One resource group in a dedicated subscription containing: a VNet with one honeypot subnet and one
-private-endpoint subnet, an NSG (inbound 23/2323/1883 only, outbound deny except the container
-registry, Storage and an optional bootstrap rule), a static public IP, a Linux VM running the
-container via Docker, a Basic Container Registry, a storage account with no public access or
-shared keys behind a Blob private endpoint, a write-only custom role for the VM identity, and a
-GitHub OIDC identity (federated credential) that can push images and run commands on the VM only.
+private-endpoint subnet, an NSG (inbound 23/2323/1883 only, outbound deny except Azure Monitor
+and an optional bootstrap rule), a static public IP, a Linux VM
+running the container via Docker, a Premium Container Registry, a storage account with no public
+access or shared keys behind Blob and ACR private endpoints, a write-only custom role for the VM identity,
+a Log Analytics workspace and Application Insights resource, and a GitHub OIDC identity (federated
+credential) that can push images and run commands on the VM only.
 
 ## First apply
+
+For the complete Azure bootstrap, GitHub environment variables, OIDC
+federation, and deployment steps, see
+[`docs/azure-github-deployment.md`](../docs/azure-github-deployment.md).
 
 1. Use a dedicated subscription. Copy `terraform.tfvars.example` to `terraform.tfvars` and fill it in.
 2. `terraform init -backend-config=backend.hcl` (create the state storage account separately, once, outside this config).
@@ -21,11 +27,13 @@ GitHub OIDC identity (federated credential) that can push images and run command
 
 ## Deploy (called from GitHub Actions)
 
-`az vm run-command invoke ... --scripts "/opt/honeypot/deploy.sh <tag>"` after pushing the image to the registry.
+The `Build and deploy` workflow builds and pushes an image, then invokes
+`/opt/honeypot/deploy.sh <tag>` through Azure Run Command. It requires the `prod` environment and
+repository variables for the Azure IDs, ACR name/login server, resource group and VM name.
 
 ## Known gaps
 
-- No Dockerfile, workflows or app changes exist yet (managed-identity Blob client, `AzureStorage:AccountUrl`, container created here instead of in code).
-- The Storage service-tag outbound rule is a residual exfiltration path (see `network.tf`).
 - The Terraform apply identity (separate from the deploy identity) is bootstrapped outside this config.
-- Budgets, Azure Policy and diagnostics/Log Analytics are not included yet.
+- Set `log_reader_principal_id` to an Entra user or group object ID to grant read-only access to
+  the sessions container. The reader still needs network access to the VNet/private endpoint.
+- Budgets and Azure Policy are not included yet.

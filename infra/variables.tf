@@ -50,3 +50,10 @@ variable "allow_bootstrap_egress" {
   default     = true
   description = "Allow outbound 80/443 to the internet so cloud-init can install Docker. Set to false after first boot."
 }
+
+variable "log_reader_principal_id" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Optional Entra object ID for a human or group allowed to read captured session blobs."
+}

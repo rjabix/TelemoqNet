@@ -37,10 +37,11 @@ resource "azurerm_subnet" "honeypot" {
 }
 
 resource "azurerm_subnet" "private_endpoints" {
-  name                 = "snet-private-endpoints"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.50.0.64/27"]
+  name                              = "snet-private-endpoints"
+  resource_group_name               = azurerm_resource_group.main.name
+  virtual_network_name              = azurerm_virtual_network.main.name
+  address_prefixes                  = ["10.50.0.64/27"]
+  private_endpoint_network_policies = "Disabled"
 }
 
 resource "azurerm_network_security_group" "honeypot" {
@@ -65,12 +66,8 @@ resource "azurerm_network_security_rule" "in_honeypot" {
   network_security_group_name = azurerm_network_security_group.honeypot.name
 }
 
-# Outbound: container registry for image pulls. Registry layers are served from
-# Azure Storage, so the Storage tag is also required. This is a residual
-# exfiltration path (any storage account in Azure); closing it needs a registry
-# private endpoint, which requires the Premium registry SKU.
-resource "azurerm_network_security_rule" "out_acr" {
-  name                        = "allow-acr-outbound"
+resource "azurerm_network_security_rule" "out_azure_monitor" {
+  name                        = "allow-azure-monitor-outbound"
   priority                    = 100
   direction                   = "Outbound"
   access                      = "Allow"
@@ -78,21 +75,7 @@ resource "azurerm_network_security_rule" "out_acr" {
   source_port_range           = "*"
   destination_port_range      = "443"
   source_address_prefix       = "*"
-  destination_address_prefix  = "AzureContainerRegistry"
-  resource_group_name         = azurerm_resource_group.main.name
-  network_security_group_name = azurerm_network_security_group.honeypot.name
-}
-
-resource "azurerm_network_security_rule" "out_storage" {
-  name                        = "allow-storage-outbound"
-  priority                    = 110
-  direction                   = "Outbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "443"
-  source_address_prefix       = "*"
-  destination_address_prefix  = "Storage"
+  destination_address_prefix  = "AzureMonitor"
   resource_group_name         = azurerm_resource_group.main.name
   network_security_group_name = azurerm_network_security_group.honeypot.name
 }

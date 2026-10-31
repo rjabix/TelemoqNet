@@ -36,10 +36,24 @@ resource "azurerm_private_dns_zone" "blob" {
   tags                = local.tags
 }
 
+resource "azurerm_private_dns_zone" "acr" {
+  name                = "privatelink.azurecr.io"
+  resource_group_name = azurerm_resource_group.main.name
+  tags                = local.tags
+}
+
 resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   name                  = "link-${var.name_prefix}-blob"
   resource_group_name   = azurerm_resource_group.main.name
   private_dns_zone_name = azurerm_private_dns_zone.blob.name
+  virtual_network_id    = azurerm_virtual_network.main.id
+  tags                  = local.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "acr" {
+  name                  = "link-${var.name_prefix}-acr"
+  resource_group_name   = azurerm_resource_group.main.name
+  private_dns_zone_name = azurerm_private_dns_zone.acr.name
   virtual_network_id    = azurerm_virtual_network.main.id
   tags                  = local.tags
 }
@@ -64,6 +78,26 @@ resource "azurerm_private_endpoint" "blob" {
   }
 }
 
+resource "azurerm_private_endpoint" "acr" {
+  name                = "pe-${var.name_prefix}-acr"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  subnet_id           = azurerm_subnet.private_endpoints.id
+  tags                = local.tags
+
+  private_service_connection {
+    name                           = "acr"
+    private_connection_resource_id = azurerm_container_registry.main.id
+    subresource_names              = ["registry"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "acr"
+    private_dns_zone_ids = [azurerm_private_dns_zone.acr.id]
+  }
+}
+
 # Write-only: the honeypot identity can upload blobs but cannot read, list or
 # delete them. Verify the data action covers the upload calls the SDK makes.
 resource "azurerm_role_definition" "log_writer" {
@@ -80,7 +114,14 @@ resource "azurerm_role_definition" "log_writer" {
 }
 
 resource "azurerm_role_assignment" "vm_log_writer" {
-  scope              = azurerm_storage_container.sessions.resource_manager_id
+  scope              = azurerm_storage_container.sessions.id
   role_definition_id = azurerm_role_definition.log_writer.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.vm.principal_id
+}
+
+resource "azurerm_role_assignment" "log_reader" {
+  count                = var.log_reader_principal_id == null ? 0 : 1
+  scope                = azurerm_storage_container.sessions.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = var.log_reader_principal_id
 }
