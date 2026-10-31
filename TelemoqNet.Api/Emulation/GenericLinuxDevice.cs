@@ -33,50 +33,39 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
     public async Task<string?> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
     {
         await Task.Delay(_options.CommandLatencyMilliseconds, cancellationToken);
-        var text = command.Trim();
-        if (text.Length == 0) return string.Empty;
+        var args = ParseArguments(command);
+        if (args.Length == 0)
+            return string.Empty;
 
-        var args = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var name = Path.GetFileName(args[0]);
         if (name is "exit" or "logout")
             return null;
 
         if (!_commands.TryGetValue(name, out var handler))
-            return Limit($"sh: {name}: not found");
+            return LimitUnknownCommand(name);
 
-        var result = await handler.ExecuteAsync(
-            args.Skip(1).ToArray(),
-            new CommandContext(
-                _options,
-                _fileSystem,
-                FormatUptime,
-                () => Reboot(),
-                () => _currentDirectory,
-                path => VirtualFileSystem.ResolvePath(_currentDirectory, path),
-                ChangeDirectory),
-            cancellationToken);
+        var result = await handler.ExecuteAsync(args.Skip(1).ToArray(), CreateCommandContext(), cancellationToken);
         return result is null ? null : Limit(result);
     }
 
+    private static string[] ParseArguments(string command) =>
+        command.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+    private string LimitUnknownCommand(string name) =>
+        Limit($"sh: {name}: not found");
+
+    private CommandContext CreateCommandContext() =>
+        new(
+            _fileSystem,
+            FormatUptime,
+            () => Reboot(),
+            () => _currentDirectory,
+            path => VirtualFileSystem.ResolvePath(_currentDirectory, path),
+            ChangeDirectory);
+
     private string ListFiles(string[] args)
     {
-        var showAll = false;
-        var longFormat = false;
-        var paths = new List<string>();
-
-        foreach (var argument in args)
-        {
-            if (argument.StartsWith('-') && argument.Length > 1)
-            {
-                showAll |= argument.Contains('a');
-                longFormat |= argument.Contains('l');
-                continue;
-            }
-
-            paths.Add(argument);
-        }
-
-        var path = paths.FirstOrDefault() ?? _currentDirectory;
+        var (showAll, longFormat, path) = ParseListArguments(args);
         var resolvedPath = VirtualFileSystem.ResolvePath(_currentDirectory, path);
         var entries = _fileSystem.ListEntries(resolvedPath)
             .Where(entry => showAll || !Path.GetFileName(entry.Path).StartsWith('.'))
@@ -85,15 +74,38 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         if (entries.Length == 0 && !_fileSystem.IsDirectory(resolvedPath))
             return $"ls: {path}: No such file or directory";
 
-        if (!longFormat)
-            return string.Join('\n', entries.Select(entry => Path.GetFileName(entry.Path)));
-
-        return string.Join(
-            '\n',
-            entries.Select(entry =>
-                $"{(entry.IsDirectory ? "drwxr-xr-x" : "-rw-r--r--")} " +
-                $"1 root root {entry.Contents.Length,8} {entry.Path}"));
+        return FormatFileListing(entries, longFormat);
     }
+
+    private (bool ShowAll, bool LongFormat, string Path) ParseListArguments(string[] args)
+    {
+        var showAll = false;
+        var longFormat = false;
+        var paths = new List<string>();
+
+        foreach (var argument in args)
+        {
+            if (!argument.StartsWith('-') || argument.Length <= 1)
+            {
+                paths.Add(argument);
+                continue;
+            }
+
+            showAll |= argument.Contains('a');
+            longFormat |= argument.Contains('l');
+        }
+
+        return (showAll, longFormat, paths.FirstOrDefault() ?? _currentDirectory);
+    }
+
+    private static string FormatFileListing(VirtualFile[] entries, bool longFormat) =>
+        longFormat
+            ? string.Join(
+                '\n',
+                entries.Select(entry =>
+                    $"{(entry.IsDirectory ? "drwxr-xr-x" : "-rw-r--r--")} " +
+                    $"1 root root {entry.Contents.Length,8} {entry.Path}"))
+            : string.Join('\n', entries.Select(entry => Path.GetFileName(entry.Path)));
 
     private void AddFiles()
     {
@@ -176,8 +188,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new SimpleResponseCommand("whoami", (_, _) => "root"),
             new SimpleResponseCommand("hostname", (_, _) => _options.Hostname),
             new SimpleResponseCommand("ls", (arguments, _) => ListFiles(arguments)),
-            new SimpleResponseCommand("ifconfig", (_, _) => NetworkInfo(["ifconfig"])),
-            new SimpleResponseCommand("ip", (_, _) => NetworkInfo(["ip"])),
+            new SimpleResponseCommand("ifconfig", (_, _) => NetworkInfo(false)),
+            new SimpleResponseCommand("ip", (_, _) => NetworkInfo(true)),
             new SimpleResponseCommand("ps",
                 (_, _) => "PID USER       COMMAND\n    1 root       init\n   42 root       /bin/sh"),
             new SimpleResponseCommand("netstat",
@@ -211,7 +223,7 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         return "Restarting system.";
     }
 
-    private string NetworkInfo(string[] args) => args.Length > 0 && args[0] == "ip"
+    private static string NetworkInfo(bool ip) => ip
         ? "1: lo: <LOOPBACK,UP> mtu 65536\n    inet 127.0.0.1/8 scope host lo\n2: eth0: <BROADCAST,UP> mtu 1500\n    inet 192.168.1.1/24 scope global eth0"
         : "eth0      Link encap:Ethernet  HWaddr 02:00:00:00:00:01\n          inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0\nlo        Link encap:Local Loopback  inet addr:127.0.0.1";
 

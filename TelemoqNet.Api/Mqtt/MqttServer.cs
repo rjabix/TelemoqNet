@@ -18,7 +18,7 @@ public sealed class MqttServer(
     private readonly MqttOptions _options = options.Value;
     private readonly SemaphoreSlim _limiter = new(options.Value.MaxConnections);
     private readonly ConcurrentDictionary<string, int> _perIp = new();
-    private readonly ConcurrentBag<Task> _sessions = [];
+    private readonly ConcurrentDictionary<Task, byte> _sessions = new();
 
     public string Name => "MQTT";
 
@@ -26,7 +26,7 @@ public sealed class MqttServer(
     {
         if (!_options.Enabled)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            await WaitWhileDisabledAsync(cancellationToken);
             return;
         }
 
@@ -40,51 +40,12 @@ public sealed class MqttServer(
         var sysTask = sysPublisher.RunAsync(cancellationToken);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                TcpClient client;
-                try
-                {
-                    client = await listener.AcceptTcpClientAsync(cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "MQTT accept failed");
-                    await Task.Delay(100, cancellationToken);
-                    continue;
-                }
-
-                var endpoint = client.Client.RemoteEndPoint as IPEndPoint;
-                var key = endpoint?.Address.ToString() ?? "unknown";
-                var slotAcquired = await _limiter.WaitAsync(0, cancellationToken);
-                if (!slotAcquired || !TryAcquireIp(key))
-                {
-                    logger.LogWarning(
-                        "Rejected MQTT connection from {RemoteAddress}; global or per-IP limit reached",
-                        key);
-                    client.Dispose();
-                    if (slotAcquired) _limiter.Release();
-                    continue;
-                }
-
-                var task = HandleClientAsync(client, key, cancellationToken);
-                _sessions.Add(task);
-                _ = task.ContinueWith(_ =>
-                {
-                    _perIp.AddOrUpdate(key, 0, (_, count) => Math.Max(0, count - 1));
-                    _limiter.Release();
-                }, TaskScheduler.Default);
-            }
+            await AcceptClientsAsync(listener, cancellationToken);
         }
         finally
         {
             listener.Stop();
-            clientTasks = _sessions.ToArray();
-            await Task.WhenAll(clientTasks);
+            await Task.WhenAll(_sessions.Keys);
             try
             {
                 await sysTask;
@@ -93,6 +54,80 @@ public sealed class MqttServer(
             {
             }
         }
+    }
+
+    private static Task WaitWhileDisabledAsync(CancellationToken cancellationToken) =>
+        Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+    private async Task AcceptClientsAsync(TcpListener listener, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var client = await AcceptClientAsync(listener, cancellationToken);
+            if (client is not null)
+                await AdmitClientAsync(client, cancellationToken);
+        }
+    }
+
+    private async Task<TcpClient?> AcceptClientAsync(
+        TcpListener listener,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await listener.AcceptTcpClientAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "MQTT accept failed");
+            await Task.Delay(100, cancellationToken);
+            return null;
+        }
+    }
+
+    private async Task AdmitClientAsync(TcpClient client, CancellationToken cancellationToken)
+    {
+        var key = GetRemoteAddress(client);
+        var slotAcquired = await _limiter.WaitAsync(0, cancellationToken);
+        if (!slotAcquired || !TryAcquireIp(key))
+        {
+            RejectClient(client, key, slotAcquired);
+            return;
+        }
+
+        TrackClient(client, key, cancellationToken);
+    }
+
+    private static string GetRemoteAddress(TcpClient client) =>
+        (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "unknown";
+
+    private void RejectClient(TcpClient client, string key, bool slotAcquired)
+    {
+        logger.LogWarning(
+            "Rejected MQTT connection from {RemoteAddress}; global or per-IP limit reached",
+            key);
+        client.Dispose();
+        if (slotAcquired) _limiter.Release();
+    }
+
+    private void TrackClient(TcpClient client, string key, CancellationToken cancellationToken)
+    {
+        var task = HandleClientAsync(client, key, cancellationToken);
+        _sessions.TryAdd(task, 0);
+        _ = task.ContinueWith(
+            _ => ReleaseClient(task, key),
+            TaskScheduler.Default);
+    }
+
+    private void ReleaseClient(Task task, string key)
+    {
+        _sessions.TryRemove(task, out byte _);
+        _perIp.AddOrUpdate(key, 0, (_, count) => Math.Max(0, count - 1));
+        _limiter.Release();
     }
 
     private async Task HandleClientAsync(TcpClient client, string ip, CancellationToken cancellationToken)
@@ -120,6 +155,4 @@ public sealed class MqttServer(
                 return true;
         }
     }
-
-    private Task[] clientTasks = [];
 }

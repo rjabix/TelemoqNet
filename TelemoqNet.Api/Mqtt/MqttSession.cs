@@ -58,56 +58,9 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
         try
         {
             var connectDeadline = DateTimeOffset.UtcNow.AddSeconds(_options.ConnectTimeoutSeconds);
-            while (!lifetime.IsCancellationRequested)
+            while (!lifetime.IsCancellationRequested &&
+                   await ReadAndDispatchAsync(readBuffer, connectDeadline, lifetime))
             {
-                var readTask = _stream.ReadAsync(readBuffer, lifetime.Token).AsTask();
-                int count;
-                if (!_connected)
-                {
-                    var remaining = connectDeadline - DateTimeOffset.UtcNow;
-                    if (remaining <= TimeSpan.Zero)
-                    {
-                        _session.DisconnectReason = "connect_timeout";
-                        lifetime.Cancel();
-                        break;
-                    }
-
-                    var timeoutTask = Task.Delay(remaining, lifetime.Token);
-                    var completed = await Task.WhenAny(readTask, timeoutTask);
-                    if (completed != readTask)
-                    {
-                        _session.DisconnectReason = "connect_timeout";
-                        lifetime.Cancel();
-                        break;
-                    }
-                }
-
-                count = await readTask;
-                if (count == 0)
-                {
-                    _session.DisconnectReason = "client_closed";
-                    break;
-                }
-
-                _reader.Append(readBuffer.AsSpan(0, count));
-                while (true)
-                {
-                    var result = _reader.Read();
-                    if (result.Status == MqttReadStatus.NeedMoreData) break;
-                    if (result.Status == MqttReadStatus.ProtocolError)
-                    {
-                        AddEvent("protocol.error", result.Error);
-                        _session.DisconnectReason = result.Error;
-                        _logger.LogWarning(
-                            "MQTT protocol error in session {SessionId}: {Error}",
-                            _session.SessionId,
-                            result.Error);
-                        return;
-                    }
-
-                    if (!await HandlePacketAsync(result.Packet!, lifetime.Token))
-                        return;
-                }
             }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -149,35 +102,119 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
         }
     }
 
-    private async Task<bool> HandlePacketAsync(MqttPacket packet, CancellationToken cancellationToken)
+    private async Task<bool> ReadAndDispatchAsync(
+        byte[] readBuffer, DateTimeOffset connectDeadline, CancellationTokenSource lifetime)
     {
-        if (_options.ResponseJitterMaxMs > 0)
+        var readTask = _stream.ReadAsync(readBuffer, lifetime.Token).AsTask();
+        if (!_connected && !await WaitForConnectAsync(readTask, connectDeadline, lifetime))
+            return false;
+
+        var count = await readTask;
+        if (count == 0)
         {
-            var delay = Random.Shared.Next(
-                _options.ResponseJitterMinMs,
-                _options.ResponseJitterMaxMs + 1);
-            await Task.Delay(delay, cancellationToken);
+            _session.DisconnectReason = "client_closed";
+            return false;
         }
 
-        switch (packet.Type)
+        _reader.Append(readBuffer.AsSpan(0, count));
+        return await DispatchAvailablePacketsAsync(lifetime.Token);
+    }
+
+    private async Task<bool> WaitForConnectAsync(
+        Task<int> readTask, DateTimeOffset connectDeadline, CancellationTokenSource lifetime)
+    {
+        var remaining = connectDeadline - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
         {
-            case MqttPacketType.Connect: return await ConnectAsync(packet.Body, cancellationToken);
-            case MqttPacketType.PingReq:
-                AddEvent("mqtt.pingreq", packet.Body.Length.ToString());
-                Enqueue(MqttPacketWriter.PingResp());
-                return true;
-            case MqttPacketType.Disconnect:
-                AddEvent("mqtt.disconnect", packet.Body.Length.ToString());
-                _session.DisconnectReason = "client_disconnect";
-                return false;
-            case MqttPacketType.Publish: return Publish(packet);
-            case MqttPacketType.Subscribe: return Subscribe(packet);
-            case MqttPacketType.Unsubscribe: return Unsubscribe(packet);
-            case MqttPacketType.PubRel:
-                Enqueue(MqttPacketWriter.PubAck(ReadId(packet.Body), 7));
-                return true;
-            default: return _connected;
+            SetConnectTimeout(lifetime);
+            return false;
         }
+
+        var timeoutTask = Task.Delay(remaining, lifetime.Token);
+        if (await Task.WhenAny(readTask, timeoutTask) == readTask)
+            return true;
+
+        SetConnectTimeout(lifetime);
+        return false;
+    }
+
+    private void SetConnectTimeout(CancellationTokenSource lifetime)
+    {
+        _session.DisconnectReason = "connect_timeout";
+        lifetime.Cancel();
+    }
+
+    private async Task<bool> DispatchAvailablePacketsAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var result = _reader.Read();
+            if (result.Status == MqttReadStatus.NeedMoreData)
+                return true;
+            if (result.Status == MqttReadStatus.ProtocolError)
+                return HandleProtocolError(result.Error);
+            if (!await HandlePacketAsync(result.Packet!, cancellationToken))
+                return false;
+        }
+    }
+
+    private bool HandleProtocolError(string? error)
+    {
+        AddEvent("protocol.error", error);
+        _session.DisconnectReason = error;
+        _logger.LogWarning(
+            "MQTT protocol error in session {SessionId}: {Error}",
+            _session.SessionId,
+            error);
+        return false;
+    }
+
+    private async Task<bool> HandlePacketAsync(MqttPacket packet, CancellationToken cancellationToken)
+    {
+        await ApplyResponseJitterAsync(cancellationToken);
+        return await DispatchPacketAsync(packet, cancellationToken);
+    }
+
+    private async Task ApplyResponseJitterAsync(CancellationToken cancellationToken)
+    {
+        if (_options.ResponseJitterMaxMs <= 0)
+            return;
+
+        var delay = Random.Shared.Next(_options.ResponseJitterMinMs, _options.ResponseJitterMaxMs + 1);
+        await Task.Delay(delay, cancellationToken);
+    }
+
+    private async Task<bool> DispatchPacketAsync(
+        MqttPacket packet, CancellationToken cancellationToken) => packet.Type switch
+    {
+        MqttPacketType.Connect => await ConnectAsync(packet.Body, cancellationToken),
+        MqttPacketType.PingReq => HandlePing(packet),
+        MqttPacketType.Disconnect => HandleDisconnect(packet),
+        MqttPacketType.Publish => Publish(packet),
+        MqttPacketType.Subscribe => Subscribe(packet),
+        MqttPacketType.Unsubscribe => Unsubscribe(packet),
+        MqttPacketType.PubRel => HandlePubRel(packet),
+        _ => _connected
+    };
+
+    private bool HandlePing(MqttPacket packet)
+    {
+        AddEvent("mqtt.pingreq", packet.Body.Length.ToString());
+        Enqueue(MqttPacketWriter.PingResp());
+        return true;
+    }
+
+    private bool HandleDisconnect(MqttPacket packet)
+    {
+        AddEvent("mqtt.disconnect", packet.Body.Length.ToString());
+        _session.DisconnectReason = "client_disconnect";
+        return false;
+    }
+
+    private bool HandlePubRel(MqttPacket packet)
+    {
+        Enqueue(MqttPacketWriter.PubAck(ReadId(packet.Body), 7));
+        return true;
     }
 
     private Task<bool> ConnectAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
@@ -188,65 +225,79 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
             return Task.FromResult(false);
         }
 
-        var data = body.Span;
+        if (!TryParseConnect(body.Span, out var request))
+            return Task.FromResult(false);
+
+        _level = request.Level;
+        var authenticated = _options.AllowAnonymous ||
+            (request.Username is not null && request.Password is not null &&
+             IsValidCredential(request.Username, request.Password));
+        _session.Username = request.Username;
+        _session.AuthenticationSucceeded = authenticated;
+        if (!authenticated)
+        {
+            return Task.FromResult(RejectAuthentication());
+        }
+
+        _connected = true;
+        _session.Events.Add(new(++_sequence, "mqtt.connect", DateTimeOffset.UtcNow,
+            $"clientId={Sanitize(request.ClientId)},level={(int)_level},keepAlive={request.KeepAlive}"));
+        Enqueue(MqttPacketWriter.ConnAck(_level, false));
+        return Task.FromResult(true);
+    }
+
+    private bool TryParseConnect(ReadOnlySpan<byte> data, out ConnectRequest request)
+    {
+        request = default;
         var offset = 0;
         var protocol = ReadString(data, ref offset);
         if (protocol is not ("MQTT" or "MQIsdp") || offset >= data.Length)
         {
             AddEvent("protocol.error", "invalid_protocol_name");
-            return Task.FromResult(false);
+            return false;
         }
 
-        _level = (MqttProtocolLevel)data[offset++];
-        if (_level is not (MqttProtocolLevel.V3 or MqttProtocolLevel.V4 or MqttProtocolLevel.V5))
+        var level = (MqttProtocolLevel)data[offset++];
+        if (level is not (MqttProtocolLevel.V3 or MqttProtocolLevel.V4 or MqttProtocolLevel.V5))
         {
             AddEvent("protocol.error", "unsupported_protocol_level");
-            return Task.FromResult(false);
+            return false;
         }
 
-        if (offset + 3 > data.Length) return Task.FromResult(false);
+        if (offset + 3 > data.Length)
+            return false;
+
         var flags = data[offset++];
         var keepAlive = BinaryPrimitives.ReadUInt16BigEndian(data[offset..]);
         offset += 2;
-        if (_level == MqttProtocolLevel.V5)
-        {
-            if (!SkipProperties(data, ref offset)) return Task.FromResult(false);
-        }
+        if (level == MqttProtocolLevel.V5 && !SkipProperties(data, ref offset))
+            return false;
 
         var clientId = ReadString(data, ref offset);
-        if ((flags & 4) != 0 && _level == MqttProtocolLevel.V5 &&
+        if ((flags & 4) != 0 && level == MqttProtocolLevel.V5 &&
             !SkipProperties(data, ref offset))
-            return Task.FromResult(false);
+            return false;
         if ((flags & 4) != 0)
         {
             ReadString(data, ref offset);
             ReadString(data, ref offset);
         }
 
-        var hasUsername = (flags & 0x80) != 0;
-        var hasPassword = (flags & 0x40) != 0;
-        var username = hasUsername ? ReadString(data, ref offset) : null;
-        var password = hasPassword ? ReadString(data, ref offset) : null;
-        var authenticated = _options.AllowAnonymous ||
-            (username is not null && password is not null && IsValidCredential(username, password));
-        _session.Username = username;
-        _session.AuthenticationSucceeded = authenticated;
-        if (!authenticated)
-        {
-            _session.AuthenticationFailureReason = "invalid_credentials";
-            AddEvent("authentication.attempt", "failure");
-            Enqueue(MqttPacketWriter.ConnAck(
-                _level,
-                false,
-                _level == MqttProtocolLevel.V5 ? (byte)0x86 : (byte)4));
-            return Task.FromResult(false);
-        }
+        var username = (flags & 0x80) != 0 ? ReadString(data, ref offset) : null;
+        var password = (flags & 0x40) != 0 ? ReadString(data, ref offset) : null;
+        request = new(level, clientId, keepAlive, username, password);
+        return true;
+    }
 
-        _connected = true;
-        _session.Events.Add(new(++_sequence, "mqtt.connect", DateTimeOffset.UtcNow,
-            $"clientId={Sanitize(clientId)},level={(int)_level},keepAlive={keepAlive}"));
-        Enqueue(MqttPacketWriter.ConnAck(_level, false));
-        return Task.FromResult(true);
+    private bool RejectAuthentication()
+    {
+        _session.AuthenticationFailureReason = "invalid_credentials";
+        AddEvent("authentication.attempt", "failure");
+        Enqueue(MqttPacketWriter.ConnAck(
+            _level,
+            false,
+            _level == MqttProtocolLevel.V5 ? (byte)0x86 : (byte)4));
+        return false;
     }
 
     private bool Publish(MqttPacket packet)
@@ -256,10 +307,7 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
         var topic = ReadString(packet.Body.Span, ref offset);
         var qos = (byte)((packet.Flags >> 1) & 3);
         var id = qos > 0 ? ReadId(packet.Body, offset) : (ushort)0;
-        if (string.IsNullOrWhiteSpace(topic) ||
-            topic.Contains('#') ||
-            topic.Contains('+') ||
-            topic.Split('/').Length > _options.MaxTopicLevels)
+        if (!IsValidPublishTopic(topic))
         {
             AddEvent("protocol.error", "invalid_publish_topic");
             return false;
@@ -267,6 +315,20 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
 
         if (qos > 0) offset += 2;
         var payload = packet.Body[offset..].ToArray();
+        AddEvent("mqtt.publish", BuildPublishDetail(topic, qos, payload));
+        PublishToBroker(packet, topic, payload, qos);
+        EnqueuePublishAcknowledgement(qos, id);
+        return true;
+    }
+
+    private bool IsValidPublishTopic(string topic) =>
+        !string.IsNullOrWhiteSpace(topic) &&
+        !topic.Contains('#') &&
+        !topic.Contains('+') &&
+        topic.Split('/').Length <= _options.MaxTopicLevels;
+
+    private string BuildPublishDetail(string topic, byte qos, byte[] payload)
+    {
         var digest = Convert.ToHexString(SHA256.HashData(payload));
         var detail = $"topic={Sanitize(topic)},qos={qos},length={payload.Length},sha256={digest}";
         if (_options.PayloadCaptureBytes > 0)
@@ -275,35 +337,31 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
             detail += $",sampleBase64={Convert.ToBase64String(payload[..sampleLength])}";
         }
 
-        AddEvent("mqtt.publish", detail);
+        return detail;
+    }
+
+    private void PublishToBroker(MqttPacket packet, string topic, byte[] payload, byte qos) =>
         _hub.Publish(
             this,
             topic,
             payload,
             qos,
             (packet.Flags & 1) != 0 && _options.GlobalAttackerRetainedEnabled);
-        if (qos == 1) Enqueue(MqttPacketWriter.PubAck(id));
-        else if (qos == 2) Enqueue(MqttPacketWriter.PubAck(id, 5));
-        return true;
+
+    private void EnqueuePublishAcknowledgement(byte qos, ushort id)
+    {
+        if (qos == 1)
+            Enqueue(MqttPacketWriter.PubAck(id));
+        else if (qos == 2)
+            Enqueue(MqttPacketWriter.PubAck(id, 5));
     }
 
     private bool Subscribe(MqttPacket packet)
     {
         if (!_connected || packet.Body.Length < 5) return false;
         AddEvent("mqtt.subscribe", packet.Body.Length.ToString());
-        var offset = 0;
-        var id = ReadId(packet.Body);
-        offset = 2;
-        var requested = new List<Subscription>();
-        while (offset + 3 <= packet.Body.Length)
-        {
-            var filter = ReadString(packet.Body.Span, ref offset);
-            if (offset >= packet.Body.Length) return false;
-            var qos = (byte)Math.Min(packet.Body.Span[offset++] & 3, 1);
-            if (filter.Split('/').Length > _options.MaxTopicLevels)
-                return false;
-            requested.Add(new(filter, qos));
-        }
+        if (!TryReadSubscriptions(packet.Body, out var id, out var requested))
+            return false;
 
         var result = _hub.Subscribe(this, requested);
         _subscriptions.AddRange(requested.Take(result.AcceptedCount).Select(x => x.Filter));
@@ -312,6 +370,27 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
         Enqueue(MqttPacketWriter.SubAck(
             id,
             requested.Select((_, index) => (byte)(index < result.AcceptedCount ? 0 : 0x80)).ToArray()));
+        return true;
+    }
+
+    private bool TryReadSubscriptions(
+        ReadOnlyMemory<byte> body, out ushort id, out List<Subscription> requested)
+    {
+        id = ReadId(body);
+        requested = [];
+        var offset = 2;
+        while (offset + 3 <= body.Length)
+        {
+            var filter = ReadString(body.Span, ref offset);
+            if (offset >= body.Length)
+                return false;
+
+            var qos = (byte)Math.Min(body.Span[offset++] & 3, 1);
+            if (filter.Split('/').Length > _options.MaxTopicLevels)
+                return false;
+            requested.Add(new(filter, qos));
+        }
+
         return true;
     }
 
@@ -379,6 +458,13 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
                           parts[1] == password);
 
     private static string Sanitize(string value) => new(value.Where(c => !char.IsControl(c)).Take(128).ToArray());
+
+    private readonly record struct ConnectRequest(
+        MqttProtocolLevel Level,
+        string ClientId,
+        ushort KeepAlive,
+        string? Username,
+        string? Password);
 
     public ValueTask DisposeAsync()
     {

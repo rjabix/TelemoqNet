@@ -65,18 +65,6 @@ public sealed class VirtualFileSystem
         return true;
     }
 
-    public IEnumerable<string> List(string path)
-    {
-        var directory = Normalize(path);
-        var prefix = directory == "/" ? "/" : directory + "/";
-
-        return _files.Keys
-            .Where(filePath => filePath.StartsWith(prefix, StringComparison.Ordinal))
-            .Select(filePath => filePath[prefix.Length..].Split('/')[0])
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal);
-    }
-
     public IEnumerable<VirtualFile> ListEntries(string path)
     {
         var directory = Normalize(path);

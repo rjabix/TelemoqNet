@@ -107,55 +107,75 @@ public sealed class TelnetSession
     {
         for (var attempt = 1; attempt <= _options.MaxAuthenticationAttempts; attempt++)
         {
-            await SendAsync("login: ", cancellationToken);
-            var username = await _parser.ReadLineAsync(true, cancellationToken);
-            if (username.EndOfStream) return false;
-            if (username.TooLong)
-            {
-                _session.AuthenticationFailureReason = "line_too_long";
-                await SendAsync("\r\nInput too long\r\n", cancellationToken);
-                continue;
-            }
+            var credentials = await ReadCredentialsAsync(cancellationToken);
+            if (credentials is null) return false;
+            if (credentials.Value.Retry) continue;
 
-            await SendAsync("\r\nPassword: ", cancellationToken);
-            var password = await _parser.ReadLineAsync(false, cancellationToken);
-            if (password.EndOfStream) return false;
-            if (password.TooLong)
-            {
-                _session.AuthenticationFailureReason = "line_too_long";
-                continue;
-            }
-
-            if (username.Interrupt || password.Interrupt || username.EndOfFile || password.EndOfFile)
-            {
-                _session.AuthenticationFailureReason = "client_interrupt";
-                return false;
-            }
-
-            var success = _device.Authenticate(username.Line ?? string.Empty, password.Line ?? string.Empty);
-            var reason = success ? null : "invalid_credentials";
-            _session.Username = username.Line;
-            _session.AuthenticationSucceeded = success;
-            _session.AuthenticationFailureReason = reason;
-            EmulationMetrics.AuthenticationAttempts.Add(1);
-            _session.LoginAttempts.Add(new LoginAttempt(
-                username.Line ?? string.Empty,
-                _options.CapturePasswords ? password.Line : null,
-                DateTimeOffset.UtcNow,
-                success,
-                reason));
-            AddEvent("authentication.attempt", success ? "success" : reason);
-            _logger.LogInformation(
-                "Login attempt {SessionId}: user={Username}, success={Success}, attempt={Attempt}",
-                _session.SessionId, username.Line, success, attempt);
-
+            var username = credentials.Value.Username;
+            var password = credentials.Value.Password;
+            var success = RecordAuthenticationAttempt(username, password, attempt);
             if (success) return true;
+            if (_options.CloseOnAuthenticationFailure) break;
             if (attempt < _options.MaxAuthenticationAttempts)
                 await Task.Delay(_options.AuthenticationRetryDelayMilliseconds, cancellationToken);
-            if (_options.CloseOnAuthenticationFailure) break;
         }
 
         return false;
+    }
+
+    private async Task<(TelnetReadResult Username, TelnetReadResult Password, bool Retry)?> ReadCredentialsAsync(
+        CancellationToken cancellationToken)
+    {
+        await SendAsync("login: ", cancellationToken);
+        var username = await _parser.ReadLineAsync(true, cancellationToken);
+        if (username.EndOfStream) return null;
+        if (username.TooLong)
+        {
+            _session.AuthenticationFailureReason = "line_too_long";
+            await SendAsync("\r\nInput too long\r\n", cancellationToken);
+            return (username, username, true);
+        }
+
+        await SendAsync("\r\nPassword: ", cancellationToken);
+        var password = await _parser.ReadLineAsync(false, cancellationToken);
+        if (password.EndOfStream) return null;
+        if (password.TooLong)
+        {
+            _session.AuthenticationFailureReason = "line_too_long";
+            return (password, password, true);
+        }
+
+        if (username.Interrupt || password.Interrupt || username.EndOfFile || password.EndOfFile)
+        {
+            _session.AuthenticationFailureReason = "client_interrupt";
+            return null;
+        }
+
+        return (username, password, false);
+    }
+
+    private bool RecordAuthenticationAttempt(
+        TelnetReadResult username,
+        TelnetReadResult password,
+        int attempt)
+    {
+        var success = _device.Authenticate(username.Line ?? string.Empty, password.Line ?? string.Empty);
+        var reason = success ? null : "invalid_credentials";
+        _session.Username = username.Line;
+        _session.AuthenticationSucceeded = success;
+        _session.AuthenticationFailureReason = reason;
+        EmulationMetrics.AuthenticationAttempts.Add(1);
+        _session.LoginAttempts.Add(new LoginAttempt(
+            username.Line ?? string.Empty,
+            _options.CapturePasswords ? password.Line : null,
+            DateTimeOffset.UtcNow,
+            success,
+            reason));
+        AddEvent("authentication.attempt", success ? "success" : reason);
+        _logger.LogInformation(
+            "Login attempt {SessionId}: user={Username}, success={Success}, attempt={Attempt}",
+            _session.SessionId, username.Line, success, attempt);
+        return success;
     }
 
     private async Task ShellAsync(CancellationToken cancellationToken)
@@ -163,55 +183,71 @@ public sealed class TelnetSession
         while (!cancellationToken.IsCancellationRequested)
         {
             var result = await _parser.ReadLineAsync(true, cancellationToken);
-            if (result.EndOfStream)
-            {
-                _session.DisconnectReason = "client_closed";
+            if (await HandleShellResultAsync(result, cancellationToken))
                 break;
-            }
-
-            if (result.TooLong)
-            {
-                AddEvent("protocol.error", "line_too_long");
-                EmulationMetrics.ProtocolErrors.Add(1);
-                await SendAsync("\r\nsh: input line too long\r\n" + _device.Prompt, cancellationToken);
-                continue;
-            }
-
-            if (result.Interrupt)
-            {
-                await SendAsync(_device.Prompt, cancellationToken);
-                continue;
-            }
-
-            if (result.EndOfFile)
-            {
-                _session.DisconnectReason = "client_eof";
-                break;
-            }
-
-            var command = (result.Line ?? string.Empty).Trim();
-            if (command.Length == 0)
-            {
-                await SendAsync(_device.Prompt, cancellationToken);
-                continue;
-            }
-
-            _logger.LogInformation("Session {SessionId} command: {Command}", _session.SessionId, command);
-            AddEvent("command.received", command);
-            EmulationMetrics.Commands.Add(1);
-            var response = await _device.ExecuteCommandAsync(command, cancellationToken);
-            _session.Commands.Add(new CommandEvent(command, DateTimeOffset.UtcNow, response));
-            AddEvent("command.completed", response is null ? "session_closed" : "response");
-            if (response is null)
-            {
-                _session.DisconnectReason = command is "exit" or "logout" ? "client_command" : "device_closed";
-                break;
-            }
-
-            await SendAsync(
-                NormalizeLineEndings(response) + _device.Prompt,
-                cancellationToken);
         }
+    }
+
+    private async Task<bool> HandleShellResultAsync(
+        TelnetReadResult result,
+        CancellationToken cancellationToken)
+    {
+        if (result.EndOfStream)
+        {
+            _session.DisconnectReason = "client_closed";
+            return true;
+        }
+
+        if (result.TooLong)
+        {
+            AddEvent("protocol.error", "line_too_long");
+            EmulationMetrics.ProtocolErrors.Add(1);
+            await SendAsync("\r\nsh: input line too long\r\n" + _device.Prompt, cancellationToken);
+            return false;
+        }
+
+        if (result.Interrupt)
+        {
+            await SendAsync(_device.Prompt, cancellationToken);
+            return false;
+        }
+
+        if (result.EndOfFile)
+        {
+            _session.DisconnectReason = "client_eof";
+            return true;
+        }
+
+        var command = (result.Line ?? string.Empty).Trim();
+        if (command.Length == 0)
+        {
+            await SendAsync(_device.Prompt, cancellationToken);
+            return false;
+        }
+
+        return await ExecuteCommandAsync(command, cancellationToken);
+    }
+
+    private async Task<bool> ExecuteCommandAsync(
+        string command,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Session {SessionId} command: {Command}", _session.SessionId, command);
+        AddEvent("command.received", command);
+        EmulationMetrics.Commands.Add(1);
+        var response = await _device.ExecuteCommandAsync(command, cancellationToken);
+        _session.Commands.Add(new CommandEvent(command, DateTimeOffset.UtcNow, response));
+        AddEvent("command.completed", response is null ? "session_closed" : "response");
+        if (response is null)
+        {
+            _session.DisconnectReason = command is "exit" or "logout"
+                ? "client_command"
+                : "device_closed";
+            return true;
+        }
+
+        await SendAsync(NormalizeLineEndings(response) + _device.Prompt, cancellationToken);
+        return false;
     }
 
     private void AddEvent(string type, string? detail) =>

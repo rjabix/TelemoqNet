@@ -1,9 +1,6 @@
-using TelemoqNet.Api.Configuration;
-
 namespace TelemoqNet.Api.Emulation;
 
 public sealed class CommandContext(
-    HoneypotOptions options,
     VirtualFileSystem fileSystem,
     Func<string> uptime,
     Action reboot,
@@ -11,7 +8,6 @@ public sealed class CommandContext(
     Func<string, string> resolvePath,
     Func<string, bool> changeDirectory)
 {
-    public HoneypotOptions Options { get; } = options;
     public VirtualFileSystem FileSystem { get; } = fileSystem;
     public Func<string> Uptime { get; } = uptime;
     public Action Reboot { get; } = reboot;
@@ -55,23 +51,27 @@ public sealed class EchoCommand : IDeviceCommand
         CancellationToken cancellationToken)
     {
         var redirectIndex = Array.IndexOf(arguments, ">>");
-        if (redirectIndex >= 0)
-        {
-            if (redirectIndex == arguments.Length - 1)
-                return Task.FromResult<string?>("sh: syntax error: missing file operand");
+        return redirectIndex >= 0
+            ? Task.FromResult<string?>(ExecuteRedirect(arguments, redirectIndex, context))
+            : Task.FromResult<string?>(string.Join(' ', arguments));
+    }
 
-            if (redirectIndex != arguments.Length - 2)
-                return Task.FromResult<string?>("sh: syntax error near unexpected token");
+    private static string ExecuteRedirect(
+        string[] arguments,
+        int redirectIndex,
+        CommandContext context)
+    {
+        if (redirectIndex == arguments.Length - 1)
+            return "sh: syntax error: missing file operand";
 
-            var content = string.Join(' ', arguments[..redirectIndex]) + "\n";
-            var path = context.ResolvePath(arguments[^1]);
-            return Task.FromResult<string?>(
-                context.FileSystem.Append(path, content)
-                    ? string.Empty
-                    : $"sh: {arguments[^1]}: Is a directory");
-        }
+        if (redirectIndex != arguments.Length - 2)
+            return "sh: syntax error near unexpected token";
 
-        return Task.FromResult<string?>(string.Join(' ', arguments));
+        var content = string.Join(' ', arguments[..redirectIndex]) + "\n";
+        var path = context.ResolvePath(arguments[^1]);
+        return context.FileSystem.Append(path, content)
+            ? string.Empty
+            : $"sh: {arguments[^1]}: Is a directory";
     }
 }
 
@@ -99,17 +99,17 @@ public sealed class ChangeDirectoryCommand : IDeviceCommand
         var target = arguments.Length == 0 ? "/root" : arguments[0];
         var path = context.ResolvePath(target);
 
-        if (context.FileSystem.Contains(path) &&
-            !context.FileSystem.IsDirectory(path))
-        {
-            return Task.FromResult<string?>(
-                $"sh: cd: {target}: Not a directory");
-        }
+        return Task.FromResult<string?>(ChangeDirectory(target, path, context));
+    }
 
-        return Task.FromResult<string?>(
-            context.ChangeDirectory(path)
-                ? string.Empty
-                : $"sh: cd: {target}: No such file or directory");
+    private static string ChangeDirectory(string target, string path, CommandContext context)
+    {
+        if (context.FileSystem.Contains(path) && !context.FileSystem.IsDirectory(path))
+            return $"sh: cd: {target}: Not a directory";
+
+        return context.ChangeDirectory(path)
+            ? string.Empty
+            : $"sh: cd: {target}: No such file or directory";
     }
 }
 
@@ -146,14 +146,18 @@ public sealed class TouchCommand : IDeviceCommand
         if (arguments.Length == 0)
             return Task.FromResult<string?>("touch: missing file operand");
 
-        foreach (var path in arguments)
+        return Task.FromResult<string?>(TouchFiles(arguments, context));
+    }
+
+    private static string TouchFiles(string[] paths, CommandContext context)
+    {
+        foreach (var path in paths)
         {
             if (!context.FileSystem.Touch(context.ResolvePath(path)))
-                return Task.FromResult<string?>(
-                    $"touch: cannot touch '{path}': Is a directory");
+                return $"touch: cannot touch '{path}': Is a directory";
         }
 
-        return Task.FromResult<string?>(string.Empty);
+        return string.Empty;
     }
 }
 
@@ -170,14 +174,18 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
         if (paths.Length == 0)
             return Task.FromResult<string?>("mkdir: missing operand");
 
+        return Task.FromResult<string?>(CreateDirectories(paths, context));
+    }
+
+    private static string CreateDirectories(string[] paths, CommandContext context)
+    {
         foreach (var path in paths)
         {
             if (!context.FileSystem.AddDirectory(context.ResolvePath(path)))
-                return Task.FromResult<string?>(
-                    $"mkdir: cannot create directory '{path}': File exists");
+                return $"mkdir: cannot create directory '{path}': File exists";
         }
 
-        return Task.FromResult<string?>(string.Empty);
+        return string.Empty;
     }
 }
 
@@ -217,33 +225,37 @@ public sealed class BusyBoxCommand : IDeviceCommand
         CancellationToken cancellationToken)
     {
         if (arguments.Length == 0)
-        {
             return Task.FromResult<string?>(
                 "BusyBox v1.19.4 (built-in shell commands)");
-        }
 
         var applet = arguments[0];
         var appletArguments = arguments.Skip(1).ToArray();
-        var response = applet switch
+        return Task.FromResult<string?>(GetAppletResponse(applet, appletArguments, context));
+    }
+
+    private static string GetAppletResponse(
+        string applet,
+        string[] arguments,
+        CommandContext context) =>
+        applet switch
         {
-            "busybox" =>
-                "BusyBox v1.19.4 (built-in shell commands)",
-            "echo" =>
-                string.Join(' ', appletArguments),
-            "cat" when appletArguments.Length == 1 &&
-                       context.FileSystem.TryRead(
-                           context.ResolvePath(appletArguments[0]),
-                           out var contents) =>
+            "busybox" => "BusyBox v1.19.4 (built-in shell commands)",
+            "echo" => string.Join(' ', arguments),
+            "cat" when TryReadFile(arguments, context, out var contents) =>
                 contents.TrimEnd('\r', '\n'),
-            "uname" =>
-                "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
-            "true" or "false" or "sh" or "ls" or "mkdir" or "touch" =>
-                string.Empty,
-            _ =>
-                $"{applet}: applet not found"
+            "uname" => "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
+            "true" or "false" or "sh" or "ls" or "mkdir" or "touch" => string.Empty,
+            _ => $"{applet}: applet not found"
         };
 
-        return Task.FromResult<string?>(response);
+    private static bool TryReadFile(
+        string[] arguments,
+        CommandContext context,
+        out string contents)
+    {
+        contents = string.Empty;
+        return arguments.Length == 1 &&
+               context.FileSystem.TryRead(context.ResolvePath(arguments[0]), out contents);
     }
 }
 

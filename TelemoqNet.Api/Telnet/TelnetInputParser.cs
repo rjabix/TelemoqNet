@@ -15,6 +15,7 @@ public sealed class TelnetInputParser
     private readonly int _maxLineLength;
     private readonly int _maxPacketSize;
     private readonly Func<ReadOnlyMemory<byte>, CancellationToken, Task> _write;
+    private readonly byte[] _readBuffer = new byte[1];
     private bool _pendingCr;
 
     public TelnetInputParser(
@@ -40,46 +41,80 @@ public sealed class TelnetInputParser
             var value = await ReadByteAsync(cancellationToken);
             if (value is null) return new TelnetReadResult(null, EndOfStream: true);
 
-            if (_pendingCr)
-            {
-                _pendingCr = false;
-                if (value is 10 or 0) continue;
-            }
+            if (ConsumePendingCr(value.Value))
+                continue;
 
-            switch (value)
-            {
-                case TelnetProtocol.IAC:
-                    await ConsumeCommandAsync(cancellationToken);
-                    continue;
-                case 13:
-                    _pendingCr = true;
-                    return new TelnetReadResult(Encoding.ASCII.GetString(line.ToArray()));
-                case 10:
-                    return new TelnetReadResult(Encoding.ASCII.GetString(line.ToArray()));
-                case 8:
-                case 127:
-                    if (line.Count > 0)
-                    {
-                        line.RemoveAt(line.Count - 1);
-                        if (echo) await WriteAsync("\b \b", cancellationToken);
-                    }
-                    continue;
-                case 3:
-                    if (echo) await WriteAsync("^C\r\n", cancellationToken);
-                    return new TelnetReadResult(string.Empty, Interrupt: true);
-                case 4:
-                    return new TelnetReadResult(string.Empty, EndOfFile: true);
-                default:
-                    if (value.Value < 32 && value != 9) continue;
-                    if (line.Count == _maxLineLength)
-                        return new TelnetReadResult(null, TooLong: true);
-                    line.Add(value.Value);
-                    if (echo) await _write(new[] { value.Value }, cancellationToken);
-                    break;
-            }
+            var result = await ProcessByteAsync(value.Value, line, echo, cancellationToken);
+            if (result is not null)
+                return result;
         }
 
         return new TelnetReadResult(null, TooLong: true);
+    }
+
+    private bool ConsumePendingCr(byte value)
+    {
+        if (!_pendingCr) return false;
+
+        _pendingCr = false;
+        return value is 10 or 0;
+    }
+
+    private async Task<TelnetReadResult?> ProcessByteAsync(
+        byte value,
+        List<byte> line,
+        bool echo,
+        CancellationToken cancellationToken)
+    {
+        if (value == TelnetProtocol.IAC)
+        {
+            await ConsumeCommandAsync(cancellationToken);
+            return null;
+        }
+
+        if (value is 13 or 10)
+        {
+            _pendingCr = value == 13;
+            return CreateLineResult(line);
+        }
+
+        if (value is 8 or 127)
+        {
+            await RemoveLastByteAsync(line, echo, cancellationToken);
+            return null;
+        }
+
+        if (value == 3)
+        {
+            if (echo) await WriteAsync("^C\r\n", cancellationToken);
+            return new TelnetReadResult(string.Empty, Interrupt: true);
+        }
+
+        if (value == 4)
+            return new TelnetReadResult(string.Empty, EndOfFile: true);
+
+        if (value < 32 && value != 9)
+            return null;
+        if (line.Count == _maxLineLength)
+            return new TelnetReadResult(null, TooLong: true);
+
+        line.Add(value);
+        if (echo) await _write(new[] { value }, cancellationToken);
+        return null;
+    }
+
+    private static TelnetReadResult CreateLineResult(List<byte> line) =>
+        new(Encoding.ASCII.GetString(line.ToArray()));
+
+    private async Task RemoveLastByteAsync(
+        List<byte> line,
+        bool echo,
+        CancellationToken cancellationToken)
+    {
+        if (line.Count == 0) return;
+
+        line.RemoveAt(line.Count - 1);
+        if (echo) await WriteAsync("\b \b", cancellationToken);
     }
 
     private async Task ConsumeCommandAsync(CancellationToken cancellationToken)
@@ -87,34 +122,15 @@ public sealed class TelnetInputParser
         var command = await ReadByteAsync(cancellationToken);
         if (command is null || command == TelnetProtocol.IAC) return;
 
-        if (command is TelnetProtocol.WILL or TelnetProtocol.WONT or TelnetProtocol.DO or TelnetProtocol.DONT)
+        if (IsNegotiationCommand(command.Value))
         {
-            var option = await ReadByteAsync(cancellationToken);
-            if (option is null) return;
-            var supported = option is TelnetProtocol.ECHO or TelnetProtocol.SUPPRESS_GO_AHEAD;
-            var response = command switch
-            {
-                TelnetProtocol.DO => supported ? TelnetProtocol.WILL : TelnetProtocol.WONT,
-                TelnetProtocol.DONT => TelnetProtocol.WONT,
-                TelnetProtocol.WILL => supported ? TelnetProtocol.DO : TelnetProtocol.DONT,
-                _ => TelnetProtocol.DONT
-            };
-            await _write(new[] { TelnetProtocol.IAC, response, option.Value }, cancellationToken);
+            await RespondToNegotiationAsync(command.Value, cancellationToken);
             return;
         }
 
         if (command == TelnetProtocol.SB)
         {
-            var sawIac = false;
-            var consumed = 0;
-            while (consumed++ < _maxPacketSize)
-            {
-                var value = await ReadByteAsync(cancellationToken);
-                if (value is null || (sawIac && value == TelnetProtocol.SE)) return;
-                sawIac = value == TelnetProtocol.IAC;
-                if (!sawIac) continue;
-                if (value == TelnetProtocol.IAC) sawIac = false;
-            }
+            await ConsumeSubnegotiationAsync(cancellationToken);
             return;
         }
 
@@ -122,11 +138,45 @@ public sealed class TelnetInputParser
             await WriteAsync("\r\n[yes]\r\n", cancellationToken);
     }
 
+    private static bool IsNegotiationCommand(byte command) =>
+        command is TelnetProtocol.WILL or TelnetProtocol.WONT or
+            TelnetProtocol.DO or TelnetProtocol.DONT;
+
+    private async Task RespondToNegotiationAsync(
+        byte command,
+        CancellationToken cancellationToken)
+    {
+        var option = await ReadByteAsync(cancellationToken);
+        if (option is null) return;
+
+        var supported = option is TelnetProtocol.ECHO or TelnetProtocol.SUPPRESS_GO_AHEAD;
+        var response = command switch
+        {
+            TelnetProtocol.DO => supported ? TelnetProtocol.WILL : TelnetProtocol.WONT,
+            TelnetProtocol.DONT => TelnetProtocol.WONT,
+            TelnetProtocol.WILL => supported ? TelnetProtocol.DO : TelnetProtocol.DONT,
+            _ => TelnetProtocol.DONT
+        };
+        await _write(new[] { TelnetProtocol.IAC, response, option.Value }, cancellationToken);
+    }
+
+    private async Task ConsumeSubnegotiationAsync(CancellationToken cancellationToken)
+    {
+        var sawIac = false;
+        for (var consumed = 0; consumed < _maxPacketSize; consumed++)
+        {
+            var value = await ReadByteAsync(cancellationToken);
+            if (value is null || sawIac && value == TelnetProtocol.SE)
+                return;
+
+            sawIac = value == TelnetProtocol.IAC && !sawIac;
+        }
+    }
+
     private async Task<byte?> ReadByteAsync(CancellationToken cancellationToken)
     {
-        var buffer = new byte[1];
-        var read = await _stream.ReadAsync(buffer, cancellationToken);
-        return read == 0 ? null : buffer[0];
+        var read = await _stream.ReadAsync(_readBuffer, cancellationToken);
+        return read == 0 ? null : _readBuffer[0];
     }
 
     private Task WriteAsync(string value, CancellationToken cancellationToken) =>

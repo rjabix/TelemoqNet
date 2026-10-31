@@ -14,31 +14,58 @@ public sealed class MqttPacketReader(int maxPacketSize)
     {
         if (_buffer.Count < 2) return new(MqttReadStatus.NeedMoreData);
         var type = _buffer[0] >> 4;
-        if (type is < 1 or > 15) return Error("invalid_packet_type");
         var flags = (byte)(_buffer[0] & 0x0f);
-        if (FixedFlags[type] != 0 && flags != FixedFlags[type]) return Error("invalid_flags");
+        var headerError = ValidateHeader(type, flags);
+        if (headerError is not null) return Error(headerError);
 
+        var length = ReadRemainingLength();
+        if (length.Status == MqttReadStatus.ProtocolError)
+            return Error(length.Error!);
+        if (length.Status == MqttReadStatus.NeedMoreData)
+            return new(MqttReadStatus.NeedMoreData);
+
+        var total = length.HeaderLength + length.RemainingLength;
+        if (_buffer.Count < total) return new(MqttReadStatus.NeedMoreData);
+
+        var body = _buffer.GetRange(length.HeaderLength, length.RemainingLength).ToArray();
+        _buffer.RemoveRange(0, total);
+        return new(MqttReadStatus.Packet, new((MqttPacketType)type, flags, body));
+    }
+
+    private string? ValidateHeader(int type, byte flags)
+    {
+        if (type is < 1 or > 15) return "invalid_packet_type";
+        return FixedFlags[type] != 0 && flags != FixedFlags[type]
+            ? "invalid_flags"
+            : null;
+    }
+
+    private RemainingLengthResult ReadRemainingLength()
+    {
         var multiplier = 1;
         var remaining = 0;
-        var index = 1;
-        for (var count = 0; count < 4; count++)
+        for (var index = 1; index <= 4; index++)
         {
             if (index >= _buffer.Count) return new(MqttReadStatus.NeedMoreData);
-            var encoded = _buffer[index++];
+
+            var encoded = _buffer[index];
             remaining += (encoded & 127) * multiplier;
-            if (remaining > maxPacketSize) return Error("packet_too_large");
+            if (remaining > maxPacketSize)
+                return new(MqttReadStatus.ProtocolError, Error: "packet_too_large");
             if ((encoded & 128) == 0)
-            {
-                var total = index + remaining;
-                if (_buffer.Count < total) return new(MqttReadStatus.NeedMoreData);
-                var body = _buffer.GetRange(index, remaining).ToArray();
-                _buffer.RemoveRange(0, total);
-                return new(MqttReadStatus.Packet, new((MqttPacketType)type, flags, body));
-            }
+                return new(MqttReadStatus.Packet, index + 1, remaining);
+
             multiplier *= 128;
         }
-        return Error("invalid_remaining_length");
+
+        return new(MqttReadStatus.ProtocolError, Error: "invalid_remaining_length");
     }
+
+    private sealed record RemainingLengthResult(
+        MqttReadStatus Status,
+        int HeaderLength = 0,
+        int RemainingLength = 0,
+        string? Error = null);
 
     private MqttReadResult Error(string error)
     {

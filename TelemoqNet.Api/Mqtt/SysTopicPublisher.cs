@@ -26,14 +26,20 @@ public sealed class SysTopicPublisher(
     private void PublishSnapshot()
     {
         var uptime = (long)(DateTimeOffset.UtcNow - _bootTime).TotalSeconds;
-        Publish("$SYS/broker/version", "TelemoqNet MQTT Broker");
-        Publish("$SYS/broker/uptime", uptime.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/clients/connected", hub.ConnectedClients.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/clients/total", hub.TotalConnections.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/messages/received", hub.MessagesReceived.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/messages/sent", hub.MessagesSent.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/bytes/received", hub.BytesReceived.ToString(CultureInfo.InvariantCulture));
-        Publish("$SYS/broker/bytes/sent", hub.BytesSent.ToString(CultureInfo.InvariantCulture));
+        var metrics = new[]
+        {
+            ("version", "TelemoqNet MQTT Broker"),
+            ("uptime", uptime.ToString(CultureInfo.InvariantCulture)),
+            ("clients/connected", hub.ConnectedClients.ToString(CultureInfo.InvariantCulture)),
+            ("clients/total", hub.TotalConnections.ToString(CultureInfo.InvariantCulture)),
+            ("messages/received", hub.MessagesReceived.ToString(CultureInfo.InvariantCulture)),
+            ("messages/sent", hub.MessagesSent.ToString(CultureInfo.InvariantCulture)),
+            ("bytes/received", hub.BytesReceived.ToString(CultureInfo.InvariantCulture)),
+            ("bytes/sent", hub.BytesSent.ToString(CultureInfo.InvariantCulture))
+        };
+
+        foreach (var (name, value) in metrics)
+            Publish($"$SYS/broker/{name}", value);
     }
 
     private void Publish(string topic, string payload) =>
