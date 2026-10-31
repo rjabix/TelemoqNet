@@ -65,10 +65,15 @@ An MQTT session owns the protocol state for one TCP connection:
 The session has an absolute lifetime cap. The outbound writer is a single
 long-running task, which prevents concurrent writes and ensures responses
 queued after CONNECT (for example SUBACK or PINGRESP) are still delivered.
+The CONNECT handshake must complete within `ConnectTimeoutSeconds`; configured
+username/password credentials are checked when anonymous access is disabled.
 
 Attacker payloads are never interpreted as commands. Publish events record
 bounded metadata such as topic, QoS, payload length, SHA-256, and configured
-payload samples rather than executing or forwarding the payload.
+payload samples (Base64, capped by `PayloadCaptureBytes`) rather than executing
+or forwarding the payload. Attacker-retained messages are routed to active
+subscribers but are not retained across subscriptions unless
+`GlobalAttackerRetainedEnabled` is enabled.
 
 ## Packet codec
 
@@ -125,8 +130,11 @@ Event names include `connection.opened`, `connection.closed`,
 compact strings containing sanitized identifiers and bounded metadata.
 
 The local CSV store preserves its existing header and neutralizes
-spreadsheet-formula cells. The Azure Blob store initializes its container once
-and stores each session as JSON under `yyyy/MM/dd/{SessionId}.json`.
+spreadsheet-formula cells. The Azure Blob store uses the configured blob service
+URI with `DefaultAzureCredential` and stores each session as JSON under
+`yyyy/MM/dd/{SessionId}.json`. The target container is provisioned by
+infrastructure; the application only writes blobs and does not create
+containers at runtime.
 
 ## Configuration and safety controls
 
@@ -160,7 +168,16 @@ The suite covers:
 - Session event preservation for CONNECT, SUBSCRIBE, PUBLISH, PINGREQ, and
   DISCONNECT.
 - MQTT listener startup logging.
+- Coalesced MQTT packets, configured credentials, bounded payload samples, and
+  component behavior such as packet decoding, topic matching, filesystem
+  resolution, validation, and session serialization.
 - Existing Telnet regression behavior.
+
+The MQTT implementation is intentionally a bounded protocol subset rather than
+a complete broker. It supports protocol levels 3, 4, and 5, QoS flows used by
+the simulator, subscriptions, retained/system topics, and bounded malformed
+input handling; full MQTT 5 properties, authentication mechanisms beyond
+username/password, and production broker interoperability are out of scope.
 
 Mosquitto/Testcontainers compatibility tests can be added as an optional
 golden-transcript layer, but a real broker is not required for the normal test

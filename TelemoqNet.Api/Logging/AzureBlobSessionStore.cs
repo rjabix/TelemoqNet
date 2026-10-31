@@ -1,3 +1,5 @@
+extern alias AzureIdentity;
+
 using System.Text.Json;
 using Azure.Storage.Blobs;
 
@@ -7,8 +9,6 @@ public sealed class AzureBlobSessionStore : ISessionStore
 {
     private readonly BlobContainerClient _container;
     private readonly ILogger<AzureBlobSessionStore> _logger;
-    private readonly SemaphoreSlim _containerInitialization = new(1, 1);
-    private bool _containerCreated;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -21,19 +21,20 @@ public sealed class AzureBlobSessionStore : ISessionStore
     {
         _logger = logger;
 
-        var connectionString =
-            configuration["AzureStorage:ConnectionString"];
+        var blobUriValue = configuration["AzureStorage:BlobUri"];
 
         var containerName =
             configuration["AzureStorage:Container"] ?? "honeypot-sessions";
 
-        if (string.IsNullOrWhiteSpace(connectionString))
+        if (!Uri.TryCreate(blobUriValue, UriKind.Absolute, out var blobUri))
         {
             throw new InvalidOperationException(
-                "AzureStorage:ConnectionString is not configured.");
+                "AzureStorage:BlobUri must be configured as an absolute URI.");
         }
 
-        var service = new BlobServiceClient(connectionString);
+        var service = new BlobServiceClient(
+            blobUri,
+            new AzureIdentity::Azure.Identity.DefaultAzureCredential());
 
         _container = service.GetBlobContainerClient(containerName);
     }
@@ -42,23 +43,6 @@ public sealed class AzureBlobSessionStore : ISessionStore
         HoneypotSession session,
         CancellationToken cancellationToken)
     {
-        if (!_containerCreated)
-        {
-            await _containerInitialization.WaitAsync(cancellationToken);
-            try
-            {
-                if (!_containerCreated)
-                {
-                    await _container.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
-                    _containerCreated = true;
-                }
-            }
-            finally
-            {
-                _containerInitialization.Release();
-            }
-        }
-
         var date = session.StartedAt.UtcDateTime;
 
         var blobName =

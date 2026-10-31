@@ -8,6 +8,12 @@ connections on behalf of an attacker.
 See [docs/architecture.md](docs/architecture.md) for the runtime architecture,
 MQTT component boundaries, packet flow, safety controls, persistence model, and
 test strategy.
+For thesis preparation, [requirements-traceability.md](docs/requirements-traceability.md)
+maps requirements to implementation and tests,
+[security-and-isolation.md](docs/security-and-isolation.md) documents the
+threat model and safety boundaries, and
+[evaluation-protocol.md](docs/evaluation-protocol.md) defines a reproducible
+non-cloud evaluation.
 
 ## Local operation
 
@@ -55,3 +61,26 @@ The broker accepts anonymous MQTT 3.x/4/5 connections by default. The
 `Honeypot:Mqtt:Enabled`, port, connection limits, and packet limit can be
 overridden with environment variables such as
 `Honeypot__Mqtt__Port=1884`.
+
+When anonymous MQTT access is disabled, configure credentials as
+`Honeypot__Mqtt__Credentials__0=sensor:secret` (prefer an external secret
+provider in exposed environments). MQTT publish events store only bounded
+metadata and an optional Base64 payload sample; payloads are never executed or
+sent to external systems.
+
+The Azure Blob integration test is opt-in. It uses `DefaultAzureCredential`,
+so provide `AZURE_STORAGE_BLOB_URI` and authenticate with Azure CLI, a managed
+identity, or another supported credential. The target storage account and
+`integration-sessions` container must already be provisioned:
+
+```bash
+AZURE_STORAGE_BLOB_URI=https://<account>.blob.core.windows.net \
+  dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj \
+  --filter FullyQualifiedName~AzureBlobIntegrationTests
+```
+
+The application requires the same endpoint through
+`AzureStorage:BlobUri`/`AzureStorage__BlobUri`. It never creates the container;
+container provisioning and role assignment are infrastructure responsibilities.
+Without `AZURE_STORAGE_BLOB_URI`, the optional test returns and the normal
+offline test suite remains deterministic.

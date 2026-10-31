@@ -83,7 +83,7 @@ The project targets `net10.0`. The main settings are:
 | `Honeypot:MaxLineLength` | Maximum captured input line | `2048` |
 | `Honeypot:Device` | Selected device profile name | `GenericLinux` |
 | `Honeypot:Banner` | Emulated device banner | BusyBox banner |
-| `AzureStorage:ConnectionString` | Required Blob Storage credential | unset |
+| `AzureStorage:BlobUri` | Required Blob Storage account endpoint | unset |
 | `AzureStorage:Container` | Session container name | `honeypot-sessions` |
 | `LocalStorage:CsvPath` | Optional local session CSV path | `data/honeypot-sessions.csv` |
 | `Honeypot:Mqtt:Enabled` | Enable the bounded plaintext MQTT listener | `true` |

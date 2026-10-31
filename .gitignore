@@ -8,3 +8,8 @@ data/
 plans/
 .DS_Store
 TelemoqNet.sln.DotSettings.user
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/terraform.tfvars
+infra/backend.hcl

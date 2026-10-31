@@ -9,7 +9,7 @@ namespace TelemoqNet.Api.Mqtt.Broker;
 public sealed class BrokerHub(IOptions<MqttOptions> options)
 {
     private readonly MqttOptions _options = options.Value;
-    private readonly ConcurrentDictionary<MqttSession, List<Subscription>> _subscriptions = new();
+    private readonly ConcurrentDictionary<IBrokerClient, List<Subscription>> _subscriptions = new();
     private readonly ConcurrentDictionary<string, (string Topic, byte[] Payload)> _retained = new();
     private long _totalConnections;
     private long _messagesReceived;
@@ -24,17 +24,20 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     public long BytesReceived => Interlocked.Read(ref _bytesReceived);
     public long BytesSent => Interlocked.Read(ref _bytesSent);
 
-    public void Register(MqttSession session)
+    public void Register(IBrokerClient session)
     {
         _subscriptions[session] = [];
         Interlocked.Increment(ref _totalConnections);
     }
-    public void Remove(MqttSession session) => _subscriptions.TryRemove(session, out _);
+    public void Remove(IBrokerClient session) => _subscriptions.TryRemove(session, out _);
 
-    public IReadOnlyList<(string Topic, byte[] Payload)> Subscribe(MqttSession session, IEnumerable<Subscription> subscriptions)
+    public SubscriptionResult Subscribe(IBrokerClient session, IEnumerable<Subscription> subscriptions)
     {
-        if (!_subscriptions.TryGetValue(session, out var current)) return [];
+        if (!_subscriptions.TryGetValue(session, out var current))
+            return new([], 0);
+
         var retained = new List<(string, byte[])>();
+        var accepted = 0;
         lock (current)
         {
             foreach (var subscription in subscriptions)
@@ -42,19 +45,20 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
                 if (current.Count >= _options.MaxSubscriptionsPerSession) break;
                 if (current.Any(x => x.Filter == subscription.Filter)) continue;
                 current.Add(subscription);
+                accepted++;
                 retained.AddRange(_retained.Values.Where(x => TopicFilter.Matches(subscription.Filter, x.Topic)));
             }
         }
-        return retained;
+        return new(retained, accepted);
     }
 
-    public void Unsubscribe(MqttSession session, IEnumerable<string> filters)
+    public void Unsubscribe(IBrokerClient session, IEnumerable<string> filters)
     {
         if (!_subscriptions.TryGetValue(session, out var current)) return;
         lock (current) current.RemoveAll(x => filters.Contains(x.Filter, StringComparer.Ordinal));
     }
 
-    public void Publish(MqttSession sender, string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
+    public void Publish(IBrokerClient sender, string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
     {
         Interlocked.Increment(ref _messagesReceived);
         Interlocked.Add(ref _bytesReceived, payload.Length);
@@ -70,7 +74,8 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     private void PublishToSubscribers(string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
     {
         if (retain && payload.Length == 0) _retained.TryRemove(topic, out _);
-        else if (retain) _retained[topic] = (topic, payload.ToArray());
+        else if (retain && _options.GlobalAttackerRetainedEnabled)
+            _retained[topic] = (topic, payload.ToArray());
 
         foreach (var pair in _subscriptions)
         {
@@ -88,7 +93,16 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     }
 }
 
+public interface IBrokerClient
+{
+    void Enqueue(byte[] packet);
+}
+
 public sealed record Subscription(string Filter, byte Qos);
+
+public sealed record SubscriptionResult(
+    IReadOnlyList<(string Topic, byte[] Payload)> Retained,
+    int AcceptedCount);
 
 public static class TopicFilter
 {

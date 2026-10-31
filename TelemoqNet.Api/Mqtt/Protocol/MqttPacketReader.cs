@@ -5,9 +5,13 @@ public sealed class MqttPacketReader(int maxPacketSize)
     private readonly List<byte> _buffer = [];
     private static readonly byte[] FixedFlags = [0, 0, 0, 0, 0, 2, 2, 0, 2, 0, 2, 0, 0, 0, 0, 0];
 
-    public MqttReadResult Read(ReadOnlySpan<byte> input)
+    public void Append(ReadOnlySpan<byte> input)
     {
         if (input.Length > 0) _buffer.AddRange(input.ToArray());
+    }
+
+    public MqttReadResult Read()
+    {
         if (_buffer.Count < 2) return new(MqttReadStatus.NeedMoreData);
         var type = _buffer[0] >> 4;
         if (type is < 1 or > 15) return Error("invalid_packet_type");

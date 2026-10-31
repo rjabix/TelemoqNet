@@ -73,6 +73,60 @@ public sealed class MqttIntegrationTests
     }
 
     [Fact]
+    public async Task CoalescedPackets_AreDrainedFromOneRead()
+    {
+        await using var fixture = await MqttFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+
+        await client.SendAsync(
+        [
+            .. ConnectPacket("coalesced", 4),
+            0xc0, 0
+        ]);
+
+        Assert.Equal(0, (await client.ReadPacketAsync()).Body[1]);
+        Assert.Equal(13, (await client.ReadPacketAsync()).Type);
+    }
+
+    [Fact]
+    public async Task ConfiguredMqttCredentials_AreRequiredAndPayloadSamplesCaptured()
+    {
+        await using var fixture = await MqttFixture.StartAsync(options =>
+        {
+            options.AllowAnonymous = false;
+            options.Credentials = ["sensor:secret"];
+            options.PayloadCaptureBytes = 4;
+        });
+        await using var client = await fixture.ConnectAsync();
+
+        await client.SendAsync(ConnectPacketWithCredentials("sensor", "secret", "auth-client"));
+        Assert.Equal(0, (await client.ReadPacketAsync()).Body[1]);
+        await client.SendAsync(PublishPacket("payload/test", "abcdef"));
+        await client.SendAsync([0xe0, 0]);
+
+        var session = await fixture.WaitForSessionAsync();
+        var publish = Assert.Single(session.Events, e => e.Type == "mqtt.publish");
+        Assert.Contains("sampleBase64=YWJjZA==", publish.Detail);
+        Assert.DoesNotContain("secret", publish.Detail);
+    }
+
+    [Fact]
+    public async Task InvalidMqttCredentials_AreRejected()
+    {
+        await using var fixture = await MqttFixture.StartAsync(options =>
+        {
+            options.AllowAnonymous = false;
+            options.Credentials = ["sensor:secret"];
+        });
+        await using var client = await fixture.ConnectAsync();
+
+        await client.SendAsync(ConnectPacketWithCredentials("sensor", "wrong", "auth-client"));
+        var response = await client.ReadPacketAsync();
+        Assert.Equal(2, response.Type);
+        Assert.Equal(4, response.Body[1]);
+    }
+
+    [Fact]
     public async Task PublishAndSubscribe_RoutesOnlyToMatchingSession()
     {
         await using var fixture = await MqttFixture.StartAsync();
@@ -152,6 +206,24 @@ public sealed class MqttIntegrationTests
             0, 4, (byte)'M', (byte)'Q', (byte)'T', (byte)'T', level, 2, 0, 30, 0, (byte)clientId.Length,
             .. Encoding.ASCII.GetBytes(clientId)
         ]);
+
+    private static byte[] ConnectPacketWithCredentials(
+        string username,
+        string password,
+        string clientId)
+    {
+        var clientIdBytes = Encoding.UTF8.GetBytes(clientId);
+        var usernameBytes = Encoding.UTF8.GetBytes(username);
+        var passwordBytes = Encoding.UTF8.GetBytes(password);
+        return Packet(
+            1,
+            [
+                0, 4, (byte)'M', (byte)'Q', (byte)'T', (byte)'T', 4, 0xc2, 0, 30,
+                0, (byte)clientIdBytes.Length, ..clientIdBytes,
+                0, (byte)usernameBytes.Length, ..usernameBytes,
+                0, (byte)passwordBytes.Length, ..passwordBytes
+            ]);
+    }
 
     private static byte[] SubscribePacket(ushort id, string filter) =>
         Packet(8, [(byte)(id >> 8), (byte)id, 0, (byte)filter.Length, .. Encoding.ASCII.GetBytes(filter), 0], 2);

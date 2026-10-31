@@ -1,0 +1,50 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - jq
+  - curl
+  - unattended-upgrades
+
+write_files:
+  - path: /opt/honeypot/deploy.sh
+    permissions: "0750"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Usage: deploy.sh <image-tag>. Pulls the image from ACR with the VM's
+      # managed identity and (re)starts the honeypot container.
+      set -euo pipefail
+      TAG="$1"
+      ACR="${acr_name}"
+      CLIENT_ID="${vm_client_id}"
+      IMAGE="${acr_login_server}/telemoqnet:$TAG"
+
+      AAD=$(curl -sf -H "Metadata:true" \
+        "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/&client_id=$CLIENT_ID" \
+        | jq -r .access_token)
+      REFRESH=$(curl -sf -X POST "https://$ACR.azurecr.io/oauth2/exchange" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        --data-urlencode "grant_type=access_token" \
+        --data-urlencode "service=$ACR.azurecr.io" \
+        --data-urlencode "access_token=$AAD" \
+        | jq -r .refresh_token)
+      echo "$REFRESH" | docker login "$ACR.azurecr.io" \
+        --username 00000000-0000-0000-0000-000000000000 --password-stdin
+
+      docker pull "$IMAGE"
+      docker rm -f honeypot 2>/dev/null || true
+      docker run -d --name honeypot --restart unless-stopped \
+        --read-only --tmpfs /tmp \
+        --cap-drop ALL --security-opt no-new-privileges \
+        --memory 512m --pids-limit 256 \
+        -p 23:2323 -p 2323:2323 -p 1883:1883 \
+        -e DOTNET_ENVIRONMENT=Production \
+        -e AZURE_CLIENT_ID="$CLIENT_ID" \
+        -e AzureStorage__AccountUrl="${blob_endpoint}" \
+        -e AzureStorage__Container="${container_name}" \
+        "$IMAGE"
+      docker logout "$ACR.azurecr.io"
+
+runcmd:
+  - systemctl enable --now docker
