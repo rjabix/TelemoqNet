@@ -24,6 +24,12 @@ variable "github_repo" {
   description = "GitHub repository allowed to deploy, as owner/repo."
 }
 
+variable "github_oidc_subject" {
+  type        = string
+  default     = null
+  description = "Optional GitHub OIDC subject prefix. Set this when GitHub includes owner and repository IDs in the subject claim."
+}
+
 variable "github_environment" {
   type        = string
   default     = "prod"

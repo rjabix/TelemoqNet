@@ -1,5 +1,6 @@
 subscription_id      = "00000000-0000-0000-0000-000000000000"
 github_repo          = "owner/TelemoqNet"
+# github_oidc_subject = "owner@123456/TelemoqNet@789012"
 admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
 # location               = "westeurope"
 # allow_bootstrap_egress = true

@@ -46,6 +46,7 @@ Edit `terraform.tfvars`:
 subscription_id      = "<honeypot-subscription-id>"
 github_repo          = "<github-owner>/<github-repository>"
 github_environment    = "prod"
+github_oidc_subject  = "<github-owner>@<owner-id>/<github-repository>@<repository-id>"
 admin_ssh_public_key = "ssh-ed25519 AAAA... user@computer"
 
 # Optional: Entra object ID of the human or group that may read session blobs.
@@ -53,9 +54,10 @@ log_reader_principal_id = "<entra-object-id>"
 ```
 
 The `github_repo` value must match the GitHub repository exactly, including
-capitalization as it appears in the repository URL. The `github_environment`
-value must remain `prod` unless both Terraform and the workflow are changed
-together.
+capitalization as it appears in the repository URL. GitHub may use an
+ID-qualified OIDC subject; if so, set `github_oidc_subject` to the exact prefix
+shown in the Actions login error. The `github_environment` value must remain
+`prod` unless both Terraform and the workflow are changed together.
 
 Initialize, validate, and apply:
 
