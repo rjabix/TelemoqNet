@@ -31,12 +31,11 @@ resource "azurerm_user_assigned_identity" "github_deploy" {
 }
 
 resource "azurerm_federated_identity_credential" "github_deploy" {
-  name                = "github-${var.github_environment}"
-  resource_group_name = azurerm_resource_group.main.name
-  parent_id           = azurerm_user_assigned_identity.github_deploy.id
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = "https://token.actions.githubusercontent.com"
-  subject             = "repo:${var.github_repo}:environment:${var.github_environment}"
+  name                      = "github-${var.github_environment}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.github_deploy.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = "repo:${var.github_repo}:environment:${var.github_environment}"
 }
 
 resource "azurerm_role_assignment" "deploy_acr_push" {

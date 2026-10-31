@@ -1,16 +1,17 @@
 name: Build and deploy
 
 on:
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Immutable image tag, normally the commit SHA"
-        required: true
-        type: string
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -21,7 +22,7 @@ jobs:
       ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
       VM_NAME: ${{ vars.VM_NAME }}
-      IMAGE_TAG: ${{ inputs.image_tag }}
+      IMAGE_TAG: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           docker build --file TelemoqNet.Api/Dockerfile \
+            --platform linux/amd64 \
             --tag "$ACR_LOGIN_SERVER/telemoqnet:$IMAGE_TAG" .
           docker push "$ACR_LOGIN_SERVER/telemoqnet:$IMAGE_TAG"
 

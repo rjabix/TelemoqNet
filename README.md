@@ -95,8 +95,8 @@ There is no inbound SSH. The VM is managed with `az vm run-command` only.
 
 ## Deploy
 
-> **Do not deploy yet.** Terraform still needs a subscription-backed `plan` review. The steps
-> below are the intended deployment flow.
+The deployment flow below has been validated against the Azure for Students subscription used
+for this project. The current deployment uses `austriaeast` and a `Standard_B2ats_v2` VM.
 
 Prerequisites: a dedicated Azure subscription, Azure CLI, Terraform 1.9 or newer, Docker, and
 this repository on GitHub.
@@ -163,10 +163,11 @@ private-network path into the VNet.
 
 ### Releasing and rolling back
 
-A new release is steps 3 and 4 with a new tag. A rollback is step 4 with a previous tag.
-Terraform is only needed when the infrastructure changes. The GitHub Actions workflow runs steps 3 and 4 from the `prod` environment behind a required approval,
-authenticating with the OIDC identity (`github_client_id`, `tenant_id` and the subscription
-ID go in as repository variables, not secrets).
+A new release is a push to `main`; the workflow tags the image with that
+commit SHA and deploys it. Terraform is only needed when the infrastructure
+changes. After the `prod` environment variables are configured, GitHub Actions
+authenticates with the OIDC identity (`github_client_id`, `tenant_id` and the
+subscription ID go in as repository environment variables, not secrets).
 
 ### Patching and teardown
 
@@ -176,9 +177,9 @@ Collected logs are deleted with the storage account, so export what you need fir
 
 ## Known gaps
 
-- `terraform plan` still needs to be run against the target subscription.
 - A private-network access method for human log analysis (for example VPN or a controlled jump host)
-  is not provisioned by this module.
+  is not provisioned by this module. The VM's write-only identity can persist sessions but cannot
+  list or read them.
 
 ## Safety and data
 

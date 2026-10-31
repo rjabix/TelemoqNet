@@ -27,9 +27,11 @@ federation, and deployment steps, see
 
 ## Deploy (called from GitHub Actions)
 
-The `Build and deploy` workflow builds and pushes an image, then invokes
-`/opt/honeypot/deploy.sh <tag>` through Azure Run Command. It requires the `prod` environment and
-repository variables for the Azure IDs, ACR name/login server, resource group and VM name.
+The `Build and deploy` workflow runs on pushes to `main`. It builds and pushes
+an image tagged with the commit SHA, then invokes `/opt/honeypot/deploy.sh
+<commit-sha>` through Azure Run Command. It requires the `prod` environment and
+environment variables for the Azure IDs, ACR name/login server, resource group
+and VM name.
 
 ## Known gaps
 
