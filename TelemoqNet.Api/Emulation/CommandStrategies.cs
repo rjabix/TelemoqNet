@@ -6,7 +6,8 @@ public sealed class CommandContext(
     Action reboot,
     Func<string> currentDirectory,
     Func<string, string> resolvePath,
-    Func<string, bool> changeDirectory)
+    Func<string, bool> changeDirectory,
+    string hostname)
 {
     public VirtualFileSystem FileSystem { get; } = fileSystem;
     public Func<string> Uptime { get; } = uptime;
@@ -14,6 +15,7 @@ public sealed class CommandContext(
     public string CurrentDirectory => currentDirectory();
     public Func<string, string> ResolvePath { get; } = resolvePath;
     public Func<string, bool> ChangeDirectory { get; } = changeDirectory;
+    public string Hostname { get; } = hostname;
 }
 
 public interface IDeviceCommand
@@ -211,7 +213,7 @@ public sealed class SystemInfoCommand : IDeviceCommand
         CancellationToken cancellationToken) =>
         Task.FromResult<string?>(
             arguments.SequenceEqual(["-a"])
-                ? "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
+                ? $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
                 : "Linux");
 }
 
@@ -243,7 +245,8 @@ public sealed class BusyBoxCommand : IDeviceCommand
             "echo" => string.Join(' ', arguments),
             "cat" when TryReadFile(arguments, context, out var contents) =>
                 contents.TrimEnd('\r', '\n'),
-            "uname" => "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
+            "uname" => $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
+            "wget" => DownloadCommand.Response("wget"),
             "true" or "false" or "sh" or "ls" or "mkdir" or "touch" => string.Empty,
             _ => $"{applet}: applet not found"
         };
@@ -257,6 +260,21 @@ public sealed class BusyBoxCommand : IDeviceCommand
         return arguments.Length == 1 &&
                context.FileSystem.TryRead(context.ResolvePath(arguments[0]), out contents);
     }
+}
+
+public sealed class DownloadCommand(string name) : IDeviceCommand
+{
+    public string Name => name;
+
+    public Task<string?> ExecuteAsync(
+        string[] arguments,
+        CommandContext context,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(Response(Name));
+
+    internal static string Response(string tool) => tool == "wget"
+        ? "wget: can't connect to remote host: Network is unreachable"
+        : "curl: (7) Failed to connect to host: Network is unreachable";
 }
 
 public sealed class SimpleResponseCommand(

@@ -1,3 +1,5 @@
+using TelemoqNet.Api.Emulation;
+
 namespace TelemoqNet.Api.Configuration;
 
 public sealed class HoneypotOptions
@@ -26,10 +28,11 @@ public sealed class HoneypotOptions
 
     public string Device { get; set; } = "GenericLinux";
 
-    public string Banner { get; set; } =
-        "BusyBox v1.19.4 (2014-06-12 08:23:17 UTC)";
+    public string Banner { get; set; } = DeviceIdentity.Banner;
 
-    public string Hostname { get; set; } = "router";
+    public string Hostname { get; set; } = DeviceIdentity.Hostname;
+
+    public MqttOptions Mqtt { get; set; } = new();
 
     public string[] Credentials { get; set; } =
         ["admin:admin", "root:root", "root:123456", "admin:1234"];

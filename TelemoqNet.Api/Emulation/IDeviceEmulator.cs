@@ -13,7 +13,8 @@ public interface IDeviceEmulator
     string CurrentDirectory { get; }
 
     Task<string?> ExecuteCommandAsync(string command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Action<PayloadDownloadAttempt>? recordDownloadAttempt = null);
 }
 
 public interface IDeviceProfileFactory

@@ -34,8 +34,10 @@ configuration, or the persistence schema.
 - Device commands are dispatched to explicit simulation strategies.
 - The virtual filesystem is process-local and path resolution cannot escape its
   simulated root.
-- `wget` and `curl` return simulation responses and never create network
-  requests.
+- `wget` and `curl` return plausible network errors and never create network
+  requests. Passive inspection records `payload.download_attempt` events with
+  tool, URL, and explicit `Executed=false` / `Downloaded=false` outcomes. No
+  payload samples are acquired; URLs are untrusted telemetry, never fetch targets.
 - No received command is passed to a shell, process launcher, script engine, or
   host filesystem API.
 - MQTT payloads are represented by bounded metadata and optional Base64 samples;

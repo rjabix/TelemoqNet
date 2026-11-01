@@ -230,7 +230,10 @@ public sealed class TelnetSession
         _logger.LogInformation("Session {SessionId} command: {Command}", _session.SessionId, command);
         AddEvent("command.received", command);
         EmulationMetrics.Commands.Add(1);
-        var response = await _device.ExecuteCommandAsync(command, cancellationToken);
+        var response = await _device.ExecuteCommandAsync(command, cancellationToken, attempt =>
+            _session.Events.Add(new SessionEvent(
+                ++_eventSequence, "payload.download_attempt", DateTimeOffset.UtcNow,
+                DownloadAttempt: attempt)));
         _session.Commands.Add(new CommandEvent(command, DateTimeOffset.UtcNow, response));
         AddEvent("command.completed", response is null ? "session_closed" : "response");
         if (response is null)

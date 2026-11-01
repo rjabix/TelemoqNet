@@ -13,7 +13,8 @@ public sealed class MqttServer(
     BrokerHub hub,
     ISessionStore sessionStore,
     ILogger<MqttServer> logger,
-    ILoggerFactory loggerFactory) : IProtocolServer
+    ILoggerFactory loggerFactory,
+    IOptions<HoneypotOptions>? deviceOptions = null) : IProtocolServer
 {
     private readonly MqttOptions _options = options.Value;
     private readonly SemaphoreSlim _limiter = new(options.Value.MaxConnections);
@@ -38,7 +39,8 @@ public sealed class MqttServer(
         var sysPublisher = new SysTopicPublisher(
             hub,
             _options,
-            loggerFactory.CreateLogger<SysTopicPublisher>());
+            loggerFactory.CreateLogger<SysTopicPublisher>(),
+            deviceOptions?.Value.Hostname ?? Emulation.DeviceIdentity.Hostname);
         var sysTask = sysPublisher.RunAsync(cancellationToken);
         try
         {

@@ -9,7 +9,8 @@ namespace TelemoqNet.Api.Mqtt;
 public sealed class SysTopicPublisher(
     BrokerHub hub,
     MqttOptions options,
-    ILogger<SysTopicPublisher> logger)
+    ILogger<SysTopicPublisher> logger,
+    string hostname = DeviceIdentity.Hostname)
 {
     private readonly DateTimeOffset _bootTime = DateTimeOffset.UtcNow;
 
@@ -44,9 +45,10 @@ public sealed class SysTopicPublisher(
             Publish($"$SYS/broker/{name}", value);
 
         // Fixed profile topics only. Values are simulated locally and never trigger device actions.
-        Publish("home/gateway/model", DeviceIdentity.Model);
-        Publish("home/gateway/firmware", DeviceIdentity.FirmwareVersion);
-        Publish("home/gateway/status", "online");
+        Publish($"{DeviceIdentity.MqttTopicPrefix}/model", DeviceIdentity.Model);
+        Publish($"{DeviceIdentity.MqttTopicPrefix}/firmware", DeviceIdentity.FirmwareVersion);
+        Publish($"{DeviceIdentity.MqttTopicPrefix}/hostname", hostname);
+        Publish($"{DeviceIdentity.MqttTopicPrefix}/status", "online");
         Publish("home/livingroom/temperature", (21.5 + Math.Sin(uptime / 60.0) * 0.4).ToString("F1", CultureInfo.InvariantCulture));
         Publish("home/livingroom/humidity", "44");
     }

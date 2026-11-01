@@ -30,8 +30,13 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             .Select(ParseCredential)
             .Any(c => c.Username == username && c.Password == password);
 
-    public async Task<string?> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
+    public async Task<string?> ExecuteCommandAsync(string command, CancellationToken cancellationToken,
+        Action<PayloadDownloadAttempt>? recordDownloadAttempt = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (recordDownloadAttempt is not null)
+            foreach (var attempt in PayloadDownloadAttemptParser.Find(command))
+                recordDownloadAttempt(attempt);
         await Task.Delay(_options.CommandLatencyMilliseconds, cancellationToken);
         var args = ParseArguments(command);
         if (args.Length == 0)
@@ -61,7 +66,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             () => Reboot(),
             () => _currentDirectory,
             path => VirtualFileSystem.ResolvePath(_currentDirectory, path),
-            ChangeDirectory);
+            ChangeDirectory,
+            _options.Hostname);
 
     private string ListFiles(string[] args)
     {
@@ -131,21 +137,22 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new VirtualFile("/etc/passwd",
                 "root:x:0:0:root:/root:/bin/sh\nadmin:x:1000:1000:admin:/home/admin:/bin/sh\n"),
             new VirtualFile("/etc/group", "root:x:0:\nadmin:x:1000:\n"),
-            new VirtualFile("/etc/os-release", "NAME=BusyBox\nVERSION=1.19.4\nID=embedded-linux\n"),
-            new VirtualFile("/etc/issue", "BusyBox v1.19.4\\n\\l\n"),
+            new VirtualFile("/etc/os-release", $"NAME=\"{DeviceIdentity.Model} Smart Home Gateway\"\nVERSION={DeviceIdentity.FirmwareVersion}\nID=embedded-linux\n"),
+            new VirtualFile("/etc/issue", _options.Banner + "\n"),
             new VirtualFile("/etc/profile", "export PATH=/bin:/sbin:/usr/bin\n"),
             new VirtualFile("/etc/resolv.conf", "nameserver 192.168.1.1\n"),
-            new VirtualFile("/etc/hosts", "127.0.0.1 localhost\n192.168.1.1 router\n"),
+            new VirtualFile("/etc/hosts", $"127.0.0.1 localhost\n192.168.1.1 {_options.Hostname}\n"),
             new VirtualFile("/etc/mtab", "rootfs / rootfs rw 0 0\n"),
             new VirtualFile("/etc/config/network", "config interface 'lan'\n\toption ipaddr '192.168.1.1'\n"),
-            new VirtualFile("/etc/config/system", "config system\n\toption hostname 'router'\n"),
-            new VirtualFile("/proc/version", "Linux version 2.6.36 (build@router) #1 SMP\n"),
+            new VirtualFile("/etc/config/system", $"config system\n\toption hostname '{_options.Hostname}'\n\toption model '{DeviceIdentity.Model}'\n\toption firmware '{DeviceIdentity.FirmwareVersion}'\n"),
+            new VirtualFile("/etc/config/mqtt", $"config mqtt\n\toption enabled '{(_options.Mqtt.Enabled ? 1 : 0)}'\n\toption port '{_options.Mqtt.Port}'\n\toption topic_prefix '{DeviceIdentity.MqttTopicPrefix}'\n"),
+            new VirtualFile("/proc/version", $"Linux version 2.6.36 (build@{_options.Hostname}) #1 SMP\n"),
             new VirtualFile("/proc/cpuinfo", "system type\t\t: MediaTek SoC\nprocessor\t\t: 0\ncpu MHz\t\t: 580.000\n"),
             new VirtualFile("/proc/meminfo", "MemTotal:          32768 kB\nMemFree:           18432 kB\n"),
             new VirtualFile("/proc/uptime", "1036800.00 1030000.00\n"),
             new VirtualFile("/proc/cmdline", "console=ttyS0,115200 root=/dev/mtdblock3 rw\n"),
-            new VirtualFile("/var/log/messages", "Jun 12 08:23:17 router daemon.info system started\n"),
-            new VirtualFile("/var/log/auth.log", "Jun 12 08:23:17 router auth.info login service ready\n"),
+            new VirtualFile("/var/log/messages", $"Jun 12 08:23:17 {_options.Hostname} daemon.info {DeviceIdentity.Model} firmware {DeviceIdentity.FirmwareVersion} started\n"),
+            new VirtualFile("/var/log/auth.log", $"Jun 12 08:23:17 {_options.Hostname} auth.info login service ready\n"),
             new VirtualFile("/tmp/.keep", string.Empty),
             new VirtualFile("/dev/null", string.Empty),
             new VirtualFile("/dev/console", string.Empty),
@@ -154,7 +161,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new VirtualFile("/bin/busybox", string.Empty, IsExecutable: true),
             new VirtualFile("/bin/sh", string.Empty, IsExecutable: true),
             new VirtualFile("/sbin/ifconfig", string.Empty, IsExecutable: true),
-            new VirtualFile("/usr/bin/wget", string.Empty, IsExecutable: true)
+            new VirtualFile("/usr/bin/wget", string.Empty, IsExecutable: true),
+            new VirtualFile("/usr/bin/curl", string.Empty, IsExecutable: true)
         };
 
         foreach (var file in files)
@@ -192,10 +200,13 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new SimpleResponseCommand("ifconfig", (_, _) => NetworkInfo(false)),
             new SimpleResponseCommand("ip", (_, _) => NetworkInfo(true)),
             new SimpleResponseCommand("ps",
-                (_, _) => "PID USER       COMMAND\n    1 root       init\n   42 root       /bin/sh"),
+                (_, _) => "PID USER       COMMAND\n    1 root       init\n   23 root       telnetd\n" +
+                          (_options.Mqtt.Enabled ? "   31 root       mqttd\n" : string.Empty) +
+                          "   42 root       /bin/sh"),
             new SimpleResponseCommand("netstat",
                 (_, _) =>
-                    "Active Internet connections\nProto Local Address           State\nTCP   0.0.0.0:23              LISTEN"),
+                    "Active Internet connections\nProto Local Address           State\nTCP   0.0.0.0:23              LISTEN" +
+                    (_options.Mqtt.Enabled ? $"\nTCP   0.0.0.0:{_options.Mqtt.Port,-16}LISTEN" : string.Empty)),
             new SimpleResponseCommand("df",
                 (_, _) =>
                     "Filesystem           1K-blocks      Used Available Use% Mounted on\n/dev/root                 4096       768      3328  19% /"),
@@ -207,8 +218,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
                 (_, _) => "[    0.000000] Linux version 2.6.36\n[    1.234000] eth0: link up"),
             new SimpleResponseCommand("date", (_, _) => DateTime.UtcNow.ToString("ddd MMM d HH:mm:ss 'UTC' yyyy")),
             new SimpleResponseCommand("uptime", (_, context) => context.Uptime()),
-            new SimpleResponseCommand("wget", (_, _) => "Network access is simulated; no outbound request was made."),
-            new SimpleResponseCommand("curl", (_, _) => "Network access is simulated; no outbound request was made."),
+            new DownloadCommand("wget"),
+            new DownloadCommand("curl"),
             new SimpleResponseCommand("reboot", (_, context) => RebootAndRespond(context)),
             new SimpleResponseCommand("clear", (_, _) => "\u001b[2J\u001b[H"),
             new SimpleResponseCommand("true", (_, _) => string.Empty),

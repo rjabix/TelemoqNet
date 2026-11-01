@@ -293,7 +293,8 @@ internal sealed class MqttFixture : IAsyncDisposable
     public ConcurrentBag<HoneypotSession> Sessions { get; }
     public ConcurrentBag<string> Logs { get; private set; } = [];
 
-    public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null, ISessionStore? sessionStore = null)
+    public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null, ISessionStore? sessionStore = null,
+        HoneypotOptions? deviceOptions = null)
     {
         var options = new MqttOptions
         {
@@ -313,7 +314,8 @@ internal sealed class MqttFixture : IAsyncDisposable
             hub,
             sessionStore ?? store,
             loggerFactory.CreateLogger<MqttServer>(),
-            loggerFactory);
+            loggerFactory,
+            deviceOptions is null ? null : Options.Create(deviceOptions));
         var task = server.RunAsync(stop.Token);
         var fixture = new MqttFixture(server.BoundPort, task, store, loggerFactory, stop)
         {

