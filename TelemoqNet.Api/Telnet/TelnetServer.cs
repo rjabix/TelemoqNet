@@ -55,10 +55,17 @@ public sealed class TelnetServer : IProtocolServer
                         cancellationToken);
 
                 var task = HandleClientAsync(client, cancellationToken);
-                lock (_taskLock) _clientTasks.Add(task);
+                lock (_taskLock)
+                {
+                    _clientTasks.Add(task);
+                }
+
                 _ = task.ContinueWith(completed =>
                 {
-                    lock (_taskLock) _clientTasks.Remove(completed);
+                    lock (_taskLock)
+                    {
+                        _clientTasks.Remove(completed);
+                    }
                 }, TaskScheduler.Default);
             }
 
@@ -71,7 +78,11 @@ public sealed class TelnetServer : IProtocolServer
         {
             listener.Stop();
             Task[] tasks;
-            lock (_taskLock) tasks = _clientTasks.ToArray();
+            lock (_taskLock)
+            {
+                tasks = _clientTasks.ToArray();
+            }
+
             await Task.WhenAll(tasks);
         }
     }

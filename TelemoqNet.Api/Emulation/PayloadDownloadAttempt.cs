@@ -36,29 +36,48 @@ internal static class PayloadDownloadAttemptParser
         foreach (var token in Tokenize(line))
         {
             if (token.Kind == TokenKind.Incomplete)
+            {
                 command.Clear();
+            }
             else if (token.Kind == TokenKind.Operator && token.Value is ";" or "&" or "|" or "\n")
             {
                 foreach (var attempt in FindInCommand(command))
+                {
                     yield return attempt;
+                }
+
                 command.Clear();
             }
             else
+            {
                 command.Add(token);
+            }
         }
 
         foreach (var attempt in FindInCommand(command))
+        {
             yield return attempt;
+        }
     }
 
     private static IEnumerable<PayloadDownloadAttempt> FindInCommand(List<Token> command)
     {
-        if (command.Count == 0) yield break;
+        if (command.Count == 0)
+        {
+            yield break;
+        }
+
         var index = 0;
         var tool = Path.GetFileName(command[index++].Value);
         if (tool == "busybox" && index < command.Count)
+        {
             tool = command[index++].Value;
-        if (tool is not ("wget" or "curl")) yield break;
+        }
+
+        if (tool is not ("wget" or "curl"))
+        {
+            yield break;
+        }
 
         var valueOptions = tool == "wget" ? WgetValueOptions : CurlValueOptions;
         var endOfOptions = false;
@@ -75,19 +94,37 @@ internal static class PayloadDownloadAttemptParser
             var value = token.Value;
             if (!endOfOptions)
             {
-                if (value == "--") { endOfOptions = true; continue; }
+                if (value == "--")
+                {
+                    endOfOptions = true;
+                    continue;
+                }
+
                 if (tool == "curl" && value.StartsWith("--url=", StringComparison.Ordinal))
+                {
                     value = value[6..];
+                }
                 else if (tool == "curl" && value == "--url" && index + 1 < command.Count)
+                {
                     value = command[++index].Value;
-                else if (valueOptions.Contains(value)) { index++; continue; }
-                else if (value.StartsWith('-')) continue;
+                }
+                else if (valueOptions.Contains(value))
+                {
+                    index++;
+                    continue;
+                }
+                else if (value.StartsWith('-'))
+                {
+                    continue;
+                }
             }
 
             if (Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
                 uri.Scheme is "http" or "https" or "ftp" or "tftp" &&
                 !string.IsNullOrEmpty(uri.Host))
+            {
                 yield return new PayloadDownloadAttempt(tool, value);
+            }
         }
     }
 
@@ -106,8 +143,14 @@ internal static class PayloadDownloadAttemptParser
             }
             else if (quote != '\0')
             {
-                if (value == quote) quote = '\0';
-                else word.Append(value);
+                if (value == quote)
+                {
+                    quote = '\0';
+                }
+                else
+                {
+                    word.Append(value);
+                }
             }
             else if (value is '\'' or '"')
             {
@@ -115,7 +158,9 @@ internal static class PayloadDownloadAttemptParser
                 started = true;
             }
             else if (value == '#' && !started)
+            {
                 break;
+            }
             else if (char.IsWhiteSpace(value) || value is ';' or '&' or '|' or '<' or '>')
             {
                 if (started)
@@ -124,11 +169,15 @@ internal static class PayloadDownloadAttemptParser
                     word.Clear();
                     started = false;
                 }
+
                 if (!char.IsWhiteSpace(value) || value == '\n')
                 {
                     // Keep a redirect operator together, so its operand is skipped once.
                     if (value is '<' or '>' && index + 1 < line.Length && line[index + 1] == value)
+                    {
                         index++;
+                    }
+
                     yield return new Token(value.ToString(), TokenKind.Operator);
                 }
             }
@@ -140,12 +189,19 @@ internal static class PayloadDownloadAttemptParser
         }
 
         if (quote != '\0')
+        {
             yield return new Token(string.Empty, TokenKind.Incomplete);
+        }
         else if (started)
+        {
             yield return new Token(word.ToString());
+        }
     }
 
-    private enum TokenKind { Word, Operator, Incomplete }
+    private enum TokenKind
+    {
+        Word, Operator, Incomplete
+    }
 
     private sealed record Token(string Value, TokenKind Kind = TokenKind.Word);
 }

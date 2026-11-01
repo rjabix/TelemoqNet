@@ -117,6 +117,11 @@ capture, emulator behavior, or persistence.
 
 ## Change guidelines
 
+- Use multiline braces for C# control-flow statements and leave a blank line
+  after a closing block before the next statement. Keep related `else`, `catch`,
+  and `finally` clauses together. StyleCop and formatter rules are build errors;
+  only `*OptionsValidator.cs` files are exempt from these layout requirements.
+  Compact auto-properties (`{ get; }`, `{ get; set; }`, `{ get; init; }`) are allowed.
 - Preserve async cancellation and connection limits in network code.
 - Keep protocol parsing separate from device emulation; Telnet transport code
   should not grow device-specific command logic.

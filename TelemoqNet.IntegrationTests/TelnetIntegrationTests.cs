@@ -51,6 +51,7 @@ public sealed class TelnetIntegrationTests
             await first.SendLineAsync("exit", useCrNul: true);
             Assert.Equal(0, await first.ReadByteOrEofAsync());
         }
+
         Assert.Contains(fixture.Logs, message => message.Contains("Failed to store session"));
         await using var second = await fixture.ConnectAsync();
         await second.LoginAsync();
@@ -80,12 +81,21 @@ public sealed class TelnetIntegrationTests
             Convert.ToHexString(greeting));
 
         // Each byte is a separate write, including subnegotiation and escaped IAC.
-        foreach (var value in new byte[] { 255, 253, 1, 255, 253, 1,
+        foreach (var value in new byte[]
+        {
+            255, 253, 1, 255, 253, 1,
                      255, 250, 31, 0, 255, 255, 0, 255, 240,
-                     (byte)'a', 255, 255, 255, 254, 1, (byte)'b', 255, 246 })
+                     (byte)'a', 255, 255, 255, 254, 1, (byte)'b', 255, 246
+        })
+        {
             await client.SendBytesAsync(new[] { value });
-        Assert.Equal(new byte[] { (byte)'a', 255, 255, 255, 252, 1,
-            13, 10, (byte)'[', (byte)'y', (byte)'e', (byte)'s', (byte)']', 13, 10 },
+        }
+
+        Assert.Equal(new byte[]
+        {
+            (byte)'a', 255, 255, 255, 252, 1,
+            13, 10, (byte)'[', (byte)'y', (byte)'e', (byte)'s', (byte)']', 13, 10
+        },
             await client.ReadBytesUntilAsync("[yes]\r\n"));
     }
 
@@ -314,7 +324,9 @@ public sealed class TelnetIntegrationTests
         finally
         {
             foreach (var client in clients)
+            {
                 await client.DisposeAsync();
+            }
         }
     }
 }
@@ -343,6 +355,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
     }
 
     public ConcurrentBag<HoneypotSession> Sessions { get; }
+
     public ConcurrentBag<string> Logs { get; }
 
     public static async Task<TelnetFixture> StartAsync(
@@ -394,7 +407,10 @@ internal sealed class TelnetFixture : IAsyncDisposable
         {
             var session = Sessions.FirstOrDefault();
             if (session is not null)
+            {
                 return session;
+            }
+
             await Task.Delay(10);
         }
 
@@ -487,9 +503,13 @@ internal sealed class TelnetClient : IAsyncDisposable
         while (!Encoding.Latin1.GetString(bytes.ToArray()).EndsWith(expected, StringComparison.Ordinal))
         {
             if (await _stream.ReadAsync(buffer, timeout.Token) == 0)
+            {
                 throw new EndOfStreamException();
+            }
+
             bytes.Add(buffer[0]);
         }
+
         return bytes.ToArray();
     }
 
@@ -515,8 +535,11 @@ internal sealed class TelnetClient : IAsyncDisposable
         {
             var read = await _stream.ReadAsync(buffer, timeout.Token);
             if (read == 0)
+            {
                 throw new EndOfStreamException(
                     $"Connection closed before receiving '{expected}'.");
+            }
+
             result.Append(Encoding.ASCII.GetString(buffer, 0, read));
         }
 
@@ -549,7 +572,11 @@ internal sealed class CapturingSessionStore : ISessionStore
         CancellationToken cancellationToken)
     {
         Sessions.Add(session);
-        if (FailPersistence) throw new IOException("Test persistence failure");
+        if (FailPersistence)
+        {
+            throw new IOException("Test persistence failure");
+        }
+
         return Task.CompletedTask;
     }
 }

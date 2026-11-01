@@ -36,6 +36,7 @@ public sealed partial class MqttIntegrationTests
             packet[9] = flags;
             yield return [packet];
         }
+
         yield return [Packet(1, valid[2..^1])]; // Truncated client ID.
         yield return [Packet(1, [.. valid[2..], 0])]; // Trailing bytes.
         var missingUsername = valid.ToArray();
@@ -88,7 +89,7 @@ public sealed partial class MqttIntegrationTests
     {
         await using var fixture = await MqttFixture.StartAsync();
         await using var client = await fixture.ConnectAsync();
-        await client.SendAsync([header, (byte)body.Length, ..body]);
+        await client.SendAsync([header, (byte)body.Length, .. body]);
         await client.ExpectClosedAsync();
         Assert.Equal("connect_required", (await fixture.WaitForSessionAsync()).DisconnectReason);
     }
@@ -110,7 +111,7 @@ public sealed partial class MqttIntegrationTests
         await using var fixture = await MqttFixture.StartAsync();
         await using var client = await fixture.ConnectAsync();
         await ConnectClientAsync(client, "malformed");
-        await client.SendAsync([header, (byte)body.Length, ..body]);
+        await client.SendAsync([header, (byte)body.Length, .. body]);
         await client.ExpectClosedAsync();
         Assert.Contains((await fixture.WaitForSessionAsync()).Events, e => e.Type == "protocol.error");
     }
@@ -230,6 +231,7 @@ public sealed partial class MqttIntegrationTests
             await Task.Delay(900);
             await client.SendAsync([0xc0]);
         }
+
         await client.ExpectClosedAsync();
         Assert.Equal("keepalive_timeout", (await fixture.WaitForSessionAsync()).DisconnectReason);
     }
@@ -249,6 +251,7 @@ public sealed partial class MqttIntegrationTests
             await client.SendAsync([0xc0, 0]);
             Assert.Equal(13, (await client.ReadPacketAsync()).Type);
         }
+
         await using var zero = await fixture.ConnectAsync();
         connect = ConnectPacket("zero", 4);
         connect[11] = 0;
@@ -273,10 +276,16 @@ public sealed partial class MqttIntegrationTests
         await sender.SendAsync(Packet(1, [0, 4, .. Encoding.ASCII.GetBytes("MQTT"), 4, 0x2e, 0, 30,
             .. MqttString("will-client"), .. MqttString("test/status"), .. MqttString("offline")]));
         Assert.Equal(2, (await sender.ReadPacketAsync()).Type);
-        if (graceful) await sender.SendAsync([0xe0, 0]);
+        if (graceful)
+        {
+            await sender.SendAsync([0xe0, 0]);
+        }
+
         await sender.DisposeAsync();
         if (graceful)
+        {
             await Assert.ThrowsAsync<OperationCanceledException>(() => observer.ReadPacketAsync(250));
+        }
         else
         {
             var will = await observer.ReadPacketAsync();
@@ -297,7 +306,11 @@ public sealed partial class MqttIntegrationTests
         await client.SendAsync(SubscribePacket(1, "#"));
         Assert.Equal(9, (await client.ReadPacketAsync()).Type);
         var topics = new List<string>();
-        for (var i = 0; i < 5; i++) topics.Add(ReadTopic((await client.ReadPacketAsync()).Body));
+        for (var i = 0; i < 5; i++)
+        {
+            topics.Add(ReadTopic((await client.ReadPacketAsync()).Body));
+        }
+
         Assert.Contains("home/livingroom/temperature", topics);
         Assert.Contains("home/gateway/model", topics);
         Assert.DoesNotContain(topics, topic => topic.StartsWith('$'));
@@ -391,7 +404,10 @@ public sealed partial class MqttIntegrationTests
         await first.SendAsync([0xe0, 0]);
         await first.ExpectClosedAsync();
         for (var i = 0; i < 100 && !fixture.Logs.Any(x => x.Contains("Failed to store MQTT session")); i++)
+        {
             await Task.Delay(10);
+        }
+
         Assert.Contains(fixture.Logs, x => x.Contains("Failed to store MQTT session"));
         await using var second = await fixture.ConnectAsync();
         await ConnectClientAsync(second, "healthy");
@@ -414,7 +430,7 @@ public sealed partial class MqttIntegrationTests
     private static byte[] MqttString(string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
-        return [(byte)(bytes.Length >> 8), (byte)bytes.Length, ..bytes];
+        return [(byte)(bytes.Length >> 8), (byte)bytes.Length, .. bytes];
     }
 
     private static byte[] QosPublish(string topic, string payload, byte qos, ushort id, bool retain = false) =>

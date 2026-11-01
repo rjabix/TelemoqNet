@@ -1,0 +1,51 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+
+csharp_prefer_braces = true:error
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_preserve_single_line_statements = false
+# Preserve compact auto-properties; StyleCop still rejects inline statement blocks.
+csharp_preserve_single_line_blocks = true
+dotnet_diagnostic.IDE0011.severity = error
+dotnet_diagnostic.IDE0055.severity = error
+
+# Enable the requested layout rules without imposing unrelated StyleCop conventions.
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpacingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.ReadabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.OrderingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.NamingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.MaintainabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.LayoutRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.DocumentationRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpecialRules.severity = none
+dotnet_diagnostic.SA0001.severity = none
+
+# Braces on separate lines; no inline blocks or omitted braces; blank line after blocks.
+dotnet_diagnostic.SA1500.severity = error
+dotnet_diagnostic.SA1501.severity = error
+dotnet_diagnostic.SA1502.severity = error
+dotnet_diagnostic.SA1503.severity = error
+dotnet_diagnostic.SA1513.severity = error
+
+# Options validators intentionally retain their compact validation statements.
+[**/*OptionsValidator.cs]
+csharp_prefer_braces = false
+csharp_preserve_single_line_statements = true
+csharp_preserve_single_line_blocks = true
+dotnet_diagnostic.IDE0011.severity = none
+dotnet_diagnostic.IDE0055.severity = none
+dotnet_diagnostic.SA1500.severity = none
+dotnet_diagnostic.SA1501.severity = none
+dotnet_diagnostic.SA1502.severity = none
+dotnet_diagnostic.SA1503.severity = none
+dotnet_diagnostic.SA1513.severity = none

@@ -85,6 +85,17 @@ Connect with `telnet localhost 2323` (or `nc localhost 2323`). The default fake 
 dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj
 ```
 
+StyleCop runs during builds for both projects. Control-flow statements require
+braces on separate lines, multiline blocks, and a blank line after a closing
+block before the next statement (SA1500–SA1503 and SA1513). Related clauses such
+as `else`, `catch`, and `finally` stay together. Formatting violations fail the
+build. The two `*OptionsValidator.cs` files are exempt and retain compact checks.
+Auto-properties may stay on one line, including `{ get; }`, `{ get; set; }`, and
+`{ get; init; }`.
+The rules live in `.editorconfig`; the analyzer dependency is shared through
+`Directory.Build.props`. See the [StyleCop rule reference](https://dotnetanalyzers.github.io/StyleCopAnalyzers/SA1513.html)
+for closing-brace spacing.
+
 ## MQTT behavior
 
 The plaintext listener accepts MQTT 3.1.1 (`MQTT`, level 4). MQTT 3.1/5 and

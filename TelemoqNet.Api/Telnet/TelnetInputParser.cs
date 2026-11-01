@@ -21,14 +21,21 @@ public sealed class TelnetInputParser
     private readonly OptionState[] _localOptions = new OptionState[256];
     private readonly OptionState[] _remoteOptions = new OptionState[256];
 
-    private enum OptionState { Disabled, Offered, Enabled }
+    private enum OptionState
+    {
+        Disabled, Offered, Enabled
+    }
 
     public async Task NegotiateAsync(CancellationToken cancellationToken)
     {
         // Offers happen only at startup, so no queued option reversals are needed.
         foreach (var option in new[] { TelnetProtocol.SUPPRESS_GO_AHEAD, TelnetProtocol.ECHO })
         {
-            if (_localOptions[option] != OptionState.Disabled) continue;
+            if (_localOptions[option] != OptionState.Disabled)
+            {
+                continue;
+            }
+
             _localOptions[option] = OptionState.Offered;
             await _write(new[] { TelnetProtocol.IAC, TelnetProtocol.WILL, option }, cancellationToken);
         }
@@ -60,7 +67,9 @@ public sealed class TelnetInputParser
         {
             var value = await ReadByteAsync(cancellationToken);
             if (value is null)
+            {
                 return new TelnetReadResult(null, EndOfStream: true);
+            }
 
             var data = value.Value;
             if (data == TelnetProtocol.IAC)
@@ -72,43 +81,69 @@ public sealed class TelnetInputParser
                     {
                         if (!tooLong)
                         {
-                            if (CanEcho(echo)) await WriteAsync("^C\r\n", cancellationToken);
+                            if (CanEcho(echo))
+                            {
+                                await WriteAsync("^C\r\n", cancellationToken);
+                            }
+
                             return new TelnetReadResult(string.Empty, Interrupt: true);
                         }
                     }
                     else if (command == TelnetProtocol.EC && !tooLong)
+                    {
                         await RemoveLastByteAsync(line, CanEcho(echo), cancellationToken);
+                    }
                     else if (command == TelnetProtocol.EL && !tooLong)
                     {
                         while (line.Count > 0)
+                        {
                             await RemoveLastByteAsync(line, CanEcho(echo), cancellationToken);
+                        }
                     }
                     else
+                    {
                         await ConsumeCommandAsync(command, cancellationToken);
+                    }
+
                     continue;
                 }
             }
 
-            if (ConsumePendingCr(data)) continue;
+            if (ConsumePendingCr(data))
+            {
+                continue;
+            }
+
             if (tooLong)
             {
                 // Discard data, but still parse Telnet commands while finding the boundary.
-                if (data is not (13 or 10)) continue;
+                if (data is not (13 or 10))
+                {
+                    continue;
+                }
+
                 _pendingCr = data == 13;
                 return new TelnetReadResult(null, TooLong: true);
             }
 
             var result = await ProcessByteAsync(data, line, CanEcho(echo), cancellationToken);
             if (result?.TooLong == true)
+            {
                 tooLong = true;
+            }
             else if (result is not null)
+            {
                 return result;
+            }
         }
     }
 
     private bool ConsumePendingCr(byte value)
     {
-        if (!_pendingCr) return false;
+        if (!_pendingCr)
+        {
+            return false;
+        }
 
         _pendingCr = false;
         return value is 10 or 0;
@@ -134,22 +169,36 @@ public sealed class TelnetInputParser
 
         if (value == 3)
         {
-            if (echo) await WriteAsync("^C\r\n", cancellationToken);
+            if (echo)
+            {
+                await WriteAsync("^C\r\n", cancellationToken);
+            }
+
             return new TelnetReadResult(string.Empty, Interrupt: true);
         }
 
         if (value == 4)
+        {
             return new TelnetReadResult(string.Empty, EndOfFile: true);
+        }
 
         if (value < 32 && value != 9)
+        {
             return null;
+        }
+
         if (line.Count == _maxLineLength)
+        {
             return new TelnetReadResult(null, TooLong: true);
+        }
 
         line.Add(value);
         if (echo)
+        {
             await _write(value == TelnetProtocol.IAC
                 ? new[] { value, value } : new[] { value }, cancellationToken);
+        }
+
         return null;
     }
 
@@ -161,10 +210,16 @@ public sealed class TelnetInputParser
         bool echo,
         CancellationToken cancellationToken)
     {
-        if (line.Count == 0) return;
+        if (line.Count == 0)
+        {
+            return;
+        }
 
         line.RemoveAt(line.Count - 1);
-        if (echo) await WriteAsync("\b \b", cancellationToken);
+        if (echo)
+        {
+            await WriteAsync("\b \b", cancellationToken);
+        }
     }
 
     private async Task ConsumeCommandAsync(byte command, CancellationToken cancellationToken)
@@ -182,7 +237,9 @@ public sealed class TelnetInputParser
         }
 
         if (command == TelnetProtocol.AYT)
+        {
             await WriteAsync("\r\n[yes]\r\n", cancellationToken);
+        }
     }
 
     private static bool IsNegotiationCommand(byte command) =>
@@ -205,12 +262,16 @@ public sealed class TelnetInputParser
         if (enable)
         {
             if (!supported)
+            {
                 response = local ? TelnetProtocol.WONT : TelnetProtocol.DONT;
+            }
             else
             {
                 states[option] = OptionState.Enabled;
                 if (previous == OptionState.Disabled)
+                {
                     response = local ? TelnetProtocol.WILL : TelnetProtocol.DO;
+                }
             }
         }
         else
@@ -218,11 +279,15 @@ public sealed class TelnetInputParser
             states[option] = OptionState.Disabled;
             // A negative acknowledgment of our startup offer needs no reply.
             if (previous == OptionState.Enabled)
+            {
                 response = local ? TelnetProtocol.WONT : TelnetProtocol.DONT;
+            }
         }
 
         if (response is not null)
+        {
             await _write(new[] { TelnetProtocol.IAC, response.Value, option }, cancellationToken);
+        }
     }
 
     private async Task ConsumeSubnegotiationAsync(CancellationToken cancellationToken)
@@ -231,7 +296,11 @@ public sealed class TelnetInputParser
         while (true)
         {
             var value = await ReadRequiredByteAsync(cancellationToken);
-            if (sawIac && value == TelnetProtocol.SE) return;
+            if (sawIac && value == TelnetProtocol.SE)
+            {
+                return;
+            }
+
             sawIac = value == TelnetProtocol.IAC && !sawIac;
         }
     }
@@ -243,9 +312,16 @@ public sealed class TelnetInputParser
     private async Task<byte?> ReadByteAsync(CancellationToken cancellationToken)
     {
         var read = await _stream.ReadAsync(_readBuffer, cancellationToken);
-        if (read == 0) return null;
+        if (read == 0)
+        {
+            return null;
+        }
+
         if (++_bytesRead > _maxPacketSize)
+        {
             throw new InvalidDataException("Telnet input byte limit exceeded before a line boundary.");
+        }
+
         return _readBuffer[0];
     }
 

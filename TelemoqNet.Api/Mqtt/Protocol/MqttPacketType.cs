@@ -11,7 +11,10 @@ public enum MqttProtocolLevel
     V3 = 3, V4 = 4, V5 = 5
 }
 
-public enum MqttReadStatus { NeedMoreData, Packet, ProtocolError }
+public enum MqttReadStatus
+{
+    NeedMoreData, Packet, ProtocolError
+}
 
 public sealed record MqttReadResult(
     MqttReadStatus Status,

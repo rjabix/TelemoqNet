@@ -23,7 +23,9 @@ public sealed class SysTopicPublisher(
         PublishSnapshot();
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(options.SysIntervalSeconds));
         while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
             PublishSnapshot();
+        }
     }
 
     private void PublishSnapshot()
@@ -42,7 +44,9 @@ public sealed class SysTopicPublisher(
         };
 
         foreach (var (name, value) in metrics)
+        {
             Publish($"$SYS/broker/{name}", value);
+        }
 
         // Fixed profile topics only. Values are simulated locally and never trigger device actions.
         Publish($"{DeviceIdentity.MqttTopicPrefix}/model", DeviceIdentity.Model);

@@ -27,8 +27,11 @@ public sealed class TelnetInputParserTests
             (byte)'a', 255, 251, 1, 255, 253, 1, (byte)'b',
             255, 254, 1, (byte)'c', 255, 253, 1, (byte)'d', 13]);
         Assert.Equal("abcd", (await parser.ReadLineAsync(true, default)).Line);
-        Assert.Equal(new byte[] { 255, 254, 1, 255, 251, 1, (byte)'b',
-            255, 252, 1, 255, 251, 1, (byte)'d' }, output.ToArray());
+        Assert.Equal(new byte[]
+        {
+            255, 254, 1, 255, 251, 1, (byte)'b',
+            255, 252, 1, 255, 251, 1, (byte)'d'
+        }, output.ToArray());
     }
 
     [Fact]

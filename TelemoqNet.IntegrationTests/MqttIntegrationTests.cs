@@ -88,7 +88,10 @@ public sealed partial class MqttIntegrationTests
             await client.ExpectClosedAsync();
 
             for (var wait = 0; fixture.Sessions.Count < attempt + 1 && wait < 100; wait++)
+            {
                 await Task.Delay(10);
+            }
+
             Assert.Equal(attempt + 1, fixture.Sessions.Count);
         }
     }
@@ -261,7 +264,8 @@ public sealed partial class MqttIntegrationTests
             var digit = length % 128;
             length /= 128;
             result.Add((byte)(digit | (length > 0 ? 128 : 0)));
-        } while (length > 0);
+        }
+        while (length > 0);
         result.AddRange(body);
         return result.ToArray();
     }
@@ -291,6 +295,7 @@ internal sealed class MqttFixture : IAsyncDisposable
     }
 
     public ConcurrentBag<HoneypotSession> Sessions { get; }
+
     public ConcurrentBag<string> Logs { get; private set; } = [];
 
     public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null, ISessionStore? sessionStore = null,
@@ -336,7 +341,11 @@ internal sealed class MqttFixture : IAsyncDisposable
         for (var attempt = 0; attempt < 100; attempt++)
         {
             var session = Sessions.FirstOrDefault();
-            if (session is not null) return session;
+            if (session is not null)
+            {
+                return session;
+            }
+
             await Task.Delay(10);
         }
 
@@ -398,8 +407,12 @@ internal sealed class MqttClient : IAsyncDisposable
             await ReadExactlyAsync(digit, timeout.Token);
             length += (digit[0] & 127) * multiplier;
             multiplier *= 128;
-            if (multiplier > 128 * 128 * 128 * 128) throw new InvalidDataException();
-        } while ((digit[0] & 128) != 0);
+            if (multiplier > 128 * 128 * 128 * 128)
+            {
+                throw new InvalidDataException();
+            }
+        }
+        while ((digit[0] & 128) != 0);
         var body = new byte[length];
         await ReadExactlyAsync(body, timeout.Token);
         return ((byte)(header[0] >> 4), (byte)(header[0] & 0x0f), body);
@@ -419,7 +432,11 @@ internal sealed class MqttClient : IAsyncDisposable
         while (offset < buffer.Length)
         {
             var read = await _stream.ReadAsync(buffer.AsMemory(offset), token);
-            if (read == 0) throw new EndOfStreamException();
+            if (read == 0)
+            {
+                throw new EndOfStreamException();
+            }
+
             offset += read;
         }
     }

@@ -35,19 +35,30 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (recordDownloadAttempt is not null)
+        {
             foreach (var attempt in PayloadDownloadAttemptParser.Find(command))
+            {
                 recordDownloadAttempt(attempt);
+            }
+        }
+
         await Task.Delay(_options.CommandLatencyMilliseconds, cancellationToken);
         var args = ParseArguments(command);
         if (args.Length == 0)
+        {
             return string.Empty;
+        }
 
         var name = Path.GetFileName(args[0]);
         if (name is "exit" or "logout")
+        {
             return null;
+        }
 
         if (!_commands.TryGetValue(name, out var handler))
+        {
             return LimitUnknownCommand(name);
+        }
 
         var result = await handler.ExecuteAsync(args.Skip(1).ToArray(), CreateCommandContext(), cancellationToken);
         return result is null ? null : Limit(result);
@@ -78,7 +89,9 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             .ToArray();
 
         if (entries.Length == 0 && !_fileSystem.IsDirectory(resolvedPath))
+        {
             return $"ls: {path}: No such file or directory";
+        }
 
         return FormatFileListing(entries, longFormat);
     }
@@ -166,13 +179,17 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         };
 
         foreach (var file in files)
+        {
             _fileSystem.Add(file);
+        }
     }
 
     private bool ChangeDirectory(string path)
     {
         if (!_fileSystem.IsDirectory(path))
+        {
             return false;
+        }
 
         _currentDirectory = path;
         return true;

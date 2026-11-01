@@ -37,11 +37,18 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
         {
             _clients.TryGetValue(clientId, out previous);
             if (previous != session && previous is not null)
+            {
                 _subscriptions.TryRemove(previous, out _);
+            }
+
             _clients[clientId] = session;
         }
+
         // Cancellation may run cleanup synchronously, including removal from this registry.
-        if (previous != session) previous?.Disconnect("client_id_replaced");
+        if (previous != session)
+        {
+            previous?.Disconnect("client_id_replaced");
+        }
     }
 
     public void Remove(IBrokerClient session)
@@ -50,7 +57,9 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
         lock (_clients)
         {
             foreach (var key in _clients.Where(pair => pair.Value == session).Select(pair => pair.Key).ToArray())
+            {
                 _clients.Remove(key);
+            }
         }
     }
 
@@ -58,7 +67,9 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     {
         var requested = subscriptions.ToArray();
         if (!_subscriptions.TryGetValue(session, out var current))
+        {
             return new([], requested.Select(_ => (byte)0x80).ToArray());
+        }
 
         var retained = new Dictionary<string, BrokerMessage>(StringComparer.Ordinal);
         var results = new List<byte>();
@@ -74,9 +85,19 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
                     continue;
                 }
 
-                var granted = subscription with { Qos = Math.Min(subscription.Qos, (byte)1) };
-                if (index >= 0) current[index] = granted;
-                else current.Add(granted);
+                var granted = subscription with
+                {
+                    Qos = Math.Min(subscription.Qos, (byte)1)
+                };
+                if (index >= 0)
+                {
+                    current[index] = granted;
+                }
+                else
+                {
+                    current.Add(granted);
+                }
+
                 results.Add(granted.Qos);
                 lock (_retained)
                 {
@@ -84,19 +105,34 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
                                  .Where(x => TopicFilter.Matches(granted.Filter, x.Topic)))
                     {
                         var qos = Math.Min(message.Qos, granted.Qos);
-                        if (retained.TryGetValue(message.Topic, out var previous)) qos = Math.Max(qos, previous.Qos);
-                        retained[message.Topic] = message with { Qos = qos };
+                        if (retained.TryGetValue(message.Topic, out var previous))
+                        {
+                            qos = Math.Max(qos, previous.Qos);
+                        }
+
+                        retained[message.Topic] = message with
+                        {
+                            Qos = qos
+                        };
                     }
                 }
             }
         }
+
         return new(retained.Values.ToArray(), results);
     }
 
     public void Unsubscribe(IBrokerClient session, IEnumerable<string> filters)
     {
-        if (!_subscriptions.TryGetValue(session, out var current)) return;
-        lock (current) current.RemoveAll(x => filters.Contains(x.Filter, StringComparer.Ordinal));
+        if (!_subscriptions.TryGetValue(session, out var current))
+        {
+            return;
+        }
+
+        lock (current)
+        {
+            current.RemoveAll(x => filters.Contains(x.Filter, StringComparer.Ordinal));
+        }
     }
 
     public void Publish(IBrokerClient sender, string topic, ReadOnlyMemory<byte> payload, byte qos, bool retain)
@@ -105,7 +141,10 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
         Interlocked.Add(ref _bytesReceived, payload.Length);
         // Trusted profile publications have their own storage. Remote clients cannot overwrite them.
         if (retain && _options.GlobalAttackerRetainedEnabled)
+        {
             UpdateRetained(_retained, topic, payload, qos);
+        }
+
         PublishToSubscribers(topic, payload, qos);
     }
 
@@ -119,11 +158,24 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
     {
         lock (_retained)
         {
-            if (target == _retained && _systemRetained.ContainsKey(topic)) return;
-            if (target == _systemRetained) _retained.Remove(topic);
-            if (payload.Length == 0) target.Remove(topic);
+            if (target == _retained && _systemRetained.ContainsKey(topic))
+            {
+                return;
+            }
+
+            if (target == _systemRetained)
+            {
+                _retained.Remove(topic);
+            }
+
+            if (payload.Length == 0)
+            {
+                target.Remove(topic);
+            }
             else if (target.ContainsKey(topic) || target.Count < _options.MaxRetainedMessages)
+            {
                 target[topic] = new(topic, payload.ToArray(), qos);
+            }
         }
     }
 
@@ -135,11 +187,22 @@ public sealed class BrokerHub(IOptions<MqttOptions> options)
             lock (subscriptions)
             {
                 foreach (var subscription in subscriptions.Where(x => TopicFilter.Matches(x.Filter, topic)))
+                {
                     grantedQos = Math.Max(grantedQos ?? 0, subscription.Qos);
+                }
             }
-            if (grantedQos is null) continue;
+
+            if (grantedQos is null)
+            {
+                continue;
+            }
+
             // One live delivery at the highest matching QoS; RETAIN is only set on subscription replay.
-            if (!client.Deliver(topic, payload.Span, Math.Min(qos, grantedQos.Value), false)) continue;
+            if (!client.Deliver(topic, payload.Span, Math.Min(qos, grantedQos.Value), false))
+            {
+                continue;
+            }
+
             Interlocked.Increment(ref _messagesSent);
             Interlocked.Add(ref _bytesSent, payload.Length);
         }
@@ -160,7 +223,11 @@ public static class TopicFilter
 {
     public static bool IsValid(string filter, int maxLevels)
     {
-        if (filter.Length == 0 || filter.Contains('\0')) return false;
+        if (filter.Length == 0 || filter.Contains('\0'))
+        {
+            return false;
+        }
+
         var parts = filter.Split('/');
         return parts.Length <= maxLevels && parts.Select((part, index) =>
             (!part.Contains('#') || (part == "#" && index == parts.Length - 1)) &&
@@ -171,12 +238,24 @@ public static class TopicFilter
     {
         var filterParts = filter.Split('/');
         var topicParts = topic.Split('/');
-        if (topic.StartsWith('$') && filterParts[0] is "+" or "#") return false;
+        if (topic.StartsWith('$') && filterParts[0] is "+" or "#")
+        {
+            return false;
+        }
+
         for (var i = 0; i < filterParts.Length; i++)
         {
-            if (filterParts[i] == "#") return i == filterParts.Length - 1 && i <= topicParts.Length;
-            if (i >= topicParts.Length || (filterParts[i] != "+" && filterParts[i] != topicParts[i])) return false;
+            if (filterParts[i] == "#")
+            {
+                return i == filterParts.Length - 1 && i <= topicParts.Length;
+            }
+
+            if (i >= topicParts.Length || (filterParts[i] != "+" && filterParts[i] != topicParts[i]))
+            {
+                return false;
+            }
         }
+
         return filterParts.Length == topicParts.Length;
     }
 }
