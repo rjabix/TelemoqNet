@@ -1,0 +1,4 @@
+HoneypotRows()
+| where Protocol == 'mqtt' and EntityKind == 'Events'
+| summarize Events=count() by EventType=tostring(Payload.Type)
+| order by Events desc

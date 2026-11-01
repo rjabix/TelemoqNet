@@ -1,0 +1,43 @@
+name: Build session importer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: session-importer-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test importer
+        run: python -m unittest discover -s tools/session-importer -p 'test_*.py' -v
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Build and publish independent importer image
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr login --name "$ACR_NAME"
+          image="$ACR_LOGIN_SERVER/telemoqnet-session-importer:$IMAGE_TAG"
+          docker build --platform linux/amd64 --file tools/session-importer/Dockerfile --tag "$image" .
+          docker push "$image"
+          digest=$(az acr repository show --name "$ACR_NAME" --image "telemoqnet-session-importer:$IMAGE_TAG" --query digest -o tsv)
+          echo "Importer published. Set analysis_image_digest = \"$digest\" in Terraform." >> "$GITHUB_STEP_SUMMARY"

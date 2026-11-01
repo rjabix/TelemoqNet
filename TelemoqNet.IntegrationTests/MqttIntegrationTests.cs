@@ -73,6 +73,27 @@ public sealed class MqttIntegrationTests
     }
 
     [Fact]
+    public async Task ReconnectFromSameIp_AfterDisconnect_ReceivesConnackAndPingResponse()
+    {
+        await using var fixture = await MqttFixture.StartAsync();
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            await using var client = await fixture.ConnectAsync();
+            await client.SendAsync(ConnectPacket($"reconnect-{attempt}", 4));
+            Assert.Equal(0, (await client.ReadPacketAsync()).Body[1]);
+            await client.SendAsync([0xc0, 0]);
+            Assert.Equal(13, (await client.ReadPacketAsync()).Type);
+            await client.SendAsync([0xe0, 0]);
+            await client.ExpectClosedAsync();
+
+            for (var wait = 0; fixture.Sessions.Count < attempt + 1 && wait < 100; wait++)
+                await Task.Delay(10);
+            Assert.Equal(attempt + 1, fixture.Sessions.Count);
+        }
+    }
+
+    [Fact]
     public async Task CoalescedPackets_AreDrainedFromOneRead()
     {
         await using var fixture = await MqttFixture.StartAsync();

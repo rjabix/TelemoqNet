@@ -1,0 +1,4 @@
+HoneypotRows()
+| where EntityKind == 'Sessions'
+| summarize Sessions=count() by bin(StartedAt, 1h), Protocol
+| render timechart

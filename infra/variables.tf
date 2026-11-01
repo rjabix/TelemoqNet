@@ -63,3 +63,26 @@ variable "log_reader_principal_id" {
   nullable    = true
   description = "Optional Entra object ID for a human or group allowed to read captured session blobs."
 }
+
+variable "analysis_enabled" {
+  type        = bool
+  default     = false
+  description = "Create isolated on-demand session analysis resources. Execution and ingestion may incur charges."
+}
+
+variable "analysis_image_digest" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Published telemoqnet-session-importer sha256 digest. Null provisions analysis infrastructure without creating the job."
+  validation {
+    condition     = var.analysis_image_digest == null ? true : can(regex("^sha256:[a-f0-9]{64}$", var.analysis_image_digest))
+    error_message = "analysis_image_digest must be null or a sha256: digest (64 lowercase hex characters)."
+  }
+}
+
+variable "analysis_runtime_enabled" {
+  type        = bool
+  default     = false
+  description = "Temporarily provision the importer job, VNet environment, and runtime identity. Disable after import to remove ongoing managed network charges while retaining tables and Workbook. Requires analysis_enabled."
+}

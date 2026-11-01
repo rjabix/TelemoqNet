@@ -1,0 +1,4 @@
+HoneypotRows()
+| where EntityKind == 'Commands'
+| summarize Occurrences=count(), ChunkedRecords=countif(HasChunks) by Command=tostring(Payload.Command)
+| top 30 by Occurrences desc

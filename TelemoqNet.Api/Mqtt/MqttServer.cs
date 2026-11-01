@@ -149,9 +149,14 @@ public sealed class MqttServer(
     {
         while (true)
         {
-            var current = _perIp.GetValueOrDefault(key);
+            if (!_perIp.TryGetValue(key, out var current))
+            {
+                if (_perIp.TryAdd(key, 1)) return true;
+                continue;
+            }
+
             if (current >= _options.MaxConnectionsPerIp) return false;
-            if (current == 0 ? _perIp.TryAdd(key, 1) : _perIp.TryUpdate(key, current + 1, current))
+            if (_perIp.TryUpdate(key, current + 1, current))
                 return true;
         }
     }

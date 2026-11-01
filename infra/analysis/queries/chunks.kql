@@ -1,0 +1,11 @@
+// Filter to one SessionId/source version for large reconstructions. Payloads
+// larger than KQL's result/value limits must be inspected in bounded chunks.
+// Base64 encodes canonical JSON. Reassemble all chunks BEFORE decoding.
+HoneypotRows()
+| where EntityKind endswith 'PayloadChunks'
+| order by SourceBlob asc, SourceETag asc, ImportRunId asc, PayloadHash asc, RecordIndex asc, ChunkIndex asc
+| summarize Encoded=strcat_array(make_list(ChunkData, 1048576), ''), Chunks=count()
+    by SourceBlob, SourceETag, ImportRunId, SessionId, EntityKind, RecordIndex, PayloadHash
+| extend Json=base64_decode_tostring(Encoded)
+| extend HashMatches=hash_sha256(Json) == PayloadHash
+| project SessionId, SourceBlob, EntityKind, RecordIndex, PayloadHash, Chunks, HashMatches, Json

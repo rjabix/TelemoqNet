@@ -1,0 +1,4 @@
+HoneypotRows()
+| where EntityKind == 'Logins'
+| summarize Attempts=count() by Username=tostring(Payload.Username), Protocol
+| top 20 by Attempts desc

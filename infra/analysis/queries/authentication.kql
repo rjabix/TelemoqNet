@@ -1,0 +1,4 @@
+HoneypotRows()
+| where EntityKind == 'Logins'
+| summarize Attempts=count() by Protocol, Successful=tostring(Payload.Successful)
+| order by Attempts desc

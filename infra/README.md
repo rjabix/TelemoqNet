@@ -33,7 +33,19 @@ an image tagged with the commit SHA, then invokes `/opt/honeypot/deploy.sh
 environment variables for the Azure IDs, ACR name/login server, resource group
 and VM name.
 
-## Known gaps
+## On-demand captured-session analysis
+
+See [the analysis operating guide](../docs/session-analysis.md) for the optional,
+Terraform-managed Container Apps Job, private blob ingestion, saved KQL, and
+Workbook. It uses a separate identity and never runs on the honeypot VM.
+The feature and its runtime are disabled by default; Terraform apply does not
+start imports. Keep `analysis_enabled = true` for tables/graphs and enable
+`analysis_runtime_enabled` only while importing. A VNet environment creates an
+hourly-billed Standard load balancer even while jobs are idle; disabling the
+runtime removes it. Storage reads and Log Analytics ingestion/retention can
+also incur charges outside available allowances.
+
+## Other known gaps
 
 - The Terraform apply identity (separate from the deploy identity) is bootstrapped outside this config.
 - Set `log_reader_principal_id` to an Entra user or group object ID to grant read-only access to

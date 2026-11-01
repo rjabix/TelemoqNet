@@ -5,3 +5,8 @@ admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
 # location               = "westeurope"
 # allow_bootstrap_egress = true
 # log_reader_principal_id = "00000000-0000-0000-0000-000000000000"
+# Optional manual session analysis; incurs usage charges, not guaranteed free.
+# Publish the importer first. Enable runtime only for imports, then disable it.
+# analysis_enabled = true
+# analysis_runtime_enabled = true # Set false after importing to remove runtime/network charges.
+# analysis_image_digest = "sha256:<64 lowercase hex characters>"
