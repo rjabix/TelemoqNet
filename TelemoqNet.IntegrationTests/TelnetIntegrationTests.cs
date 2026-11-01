@@ -177,7 +177,11 @@ public sealed class TelnetIntegrationTests
     [Fact]
     public async Task FailedAuthentication_IsCapturedWithoutLoggingPassword()
     {
-        await using var fixture = await TelnetFixture.StartAsync();
+        await using var fixture = await TelnetFixture.StartAsync(options =>
+        {
+            options.CloseOnAuthenticationFailure = true;
+            options.MaxAuthenticationAttempts = 3;
+        });
         await using var client = await fixture.ConnectAsync();
 
         await client.ReadUntilAsync("login: ");
@@ -185,15 +189,78 @@ public sealed class TelnetIntegrationTests
         await client.ReadUntilAsync("Password: ");
         await client.SendLineAsync("secret-password", useCrNul: false);
 
-        var response = await client.ReadUntilAsync("Login incorrect");
-        Assert.Contains("Login incorrect", response);
+        var response = await client.ReadUntilAsync("Login incorrect\r\n");
+        Assert.Equal("\r\nLogin incorrect\r\n", response);
+        Assert.Equal(0, await client.ReadByteOrEofAsync());
 
         var session = await fixture.WaitForSessionAsync();
         Assert.False(session.AuthenticationSucceeded);
         Assert.Equal("attacker", session.Username);
+        Assert.Equal("authentication_failed", session.DisconnectReason);
+        Assert.Single(session.LoginAttempts);
         Assert.DoesNotContain(
             fixture.Logs,
             log => log.Contains("secret-password", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedAuthentication_RetriesWithMessageAndNewLines(bool useCrNul)
+    {
+        await using var fixture = await TelnetFixture.StartAsync(options =>
+        {
+            options.CloseOnAuthenticationFailure = false;
+            options.MaxAuthenticationAttempts = 3;
+        });
+        await using var client = await fixture.ConnectAsync();
+        await client.ReadUntilAsync("login: ");
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await client.SendLineAsync("root", useCrNul);
+            await client.ReadUntilAsync("Password: ");
+            await client.SendLineAsync("wrong-password", useCrNul);
+
+            var response = await client.ReadUntilAsync("login: ");
+            Assert.Equal("\r\nLogin incorrect\r\nlogin: ", response);
+        }
+
+        await client.LoginAfterPromptAsync();
+        await client.SendLineAsync("exit", useCrNul);
+        var session = await fixture.WaitForSessionAsync();
+        Assert.True(session.AuthenticationSucceeded);
+        Assert.Equal(new[] { false, false, true }, session.LoginAttempts.Select(attempt => attempt.Successful));
+        Assert.DoesNotContain(fixture.Logs, log => log.Contains("wrong-password", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FailedAuthentication_FinalAttemptSendsMessageBeforeClosing()
+    {
+        await using var fixture = await TelnetFixture.StartAsync(options =>
+        {
+            options.CloseOnAuthenticationFailure = false;
+            options.MaxAuthenticationAttempts = 2;
+        });
+        await using var client = await fixture.ConnectAsync();
+        await client.ReadUntilAsync("login: ");
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            await client.SendLineAsync("root", useCrNul: true);
+            await client.ReadUntilAsync("Password: ");
+            await client.SendLineAsync("wrong-password", useCrNul: true);
+
+            var suffix = attempt < 2 ? "login: " : "Login incorrect\r\n";
+            var response = await client.ReadUntilAsync(suffix);
+            Assert.Equal("\r\nLogin incorrect\r\n" + (attempt < 2 ? "login: " : string.Empty), response);
+        }
+
+        Assert.Equal(0, await client.ReadByteOrEofAsync());
+        var session = await fixture.WaitForSessionAsync();
+        Assert.False(session.AuthenticationSucceeded);
+        Assert.Equal("authentication_failed", session.DisconnectReason);
+        Assert.Equal(2, session.LoginAttempts.Count);
     }
 
     [Fact]

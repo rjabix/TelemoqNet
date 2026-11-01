@@ -212,7 +212,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new SimpleResponseCommand("reboot", (_, context) => RebootAndRespond(context)),
             new SimpleResponseCommand("clear", (_, _) => "\u001b[2J\u001b[H"),
             new SimpleResponseCommand("true", (_, _) => string.Empty),
-            new SimpleResponseCommand("false", (_, _) => string.Empty)
+            new SimpleResponseCommand("false", (_, _) => string.Empty),
+            new SimpleResponseCommand("su", (_, _) => string.Empty)
         };
 
         return commands.ToDictionary(command => command.Name, StringComparer.Ordinal);

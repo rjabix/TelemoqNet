@@ -57,8 +57,6 @@ public sealed class TelnetSession
             if (!await AuthenticateAsync(cancellationToken))
             {
                 _session.DisconnectReason = "authentication_failed";
-                if (_options.CloseOnAuthenticationFailure)
-                    await SendAsync("\r\nLogin incorrect\r\n", cancellationToken);
                 return;
             }
 
@@ -111,6 +109,7 @@ public sealed class TelnetSession
             var password = credentials.Value.Password;
             var success = RecordAuthenticationAttempt(username, password, attempt);
             if (success) return true;
+            await SendAsync("\r\nLogin incorrect\r\n", cancellationToken);
             if (_options.CloseOnAuthenticationFailure) break;
             if (attempt < _options.MaxAuthenticationAttempts)
                 await Task.Delay(_options.AuthenticationRetryDelayMilliseconds, cancellationToken);
