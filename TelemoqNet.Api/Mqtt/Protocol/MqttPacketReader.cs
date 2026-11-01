@@ -3,7 +3,7 @@ namespace TelemoqNet.Api.Mqtt.Protocol;
 public sealed class MqttPacketReader(int maxPacketSize)
 {
     private readonly List<byte> _buffer = [];
-    private static readonly byte[] FixedFlags = [0, 0, 0, 0, 0, 2, 2, 0, 2, 0, 2, 0, 0, 0, 0, 0];
+    private static readonly byte[] FixedFlags = [0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 2, 0, 0, 0, 0];
 
     public void Append(ReadOnlySpan<byte> input)
     {
@@ -34,10 +34,13 @@ public sealed class MqttPacketReader(int maxPacketSize)
 
     private string? ValidateHeader(int type, byte flags)
     {
-        if (type is < 1 or > 15) return "invalid_packet_type";
-        return FixedFlags[type] != 0 && flags != FixedFlags[type]
-            ? "invalid_flags"
-            : null;
+        if (type is < 1 or > 14) return "invalid_packet_type";
+        if (type == (int)MqttPacketType.Publish)
+        {
+            var qos = (flags >> 1) & 3;
+            return qos == 3 || (qos == 0 && (flags & 8) != 0) ? "invalid_flags" : null;
+        }
+        return flags != FixedFlags[type] ? "invalid_flags" : null;
     }
 
     private RemainingLengthResult ReadRemainingLength()

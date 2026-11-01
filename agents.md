@@ -67,8 +67,7 @@ TelemoqNet.Api/
    sessions as JSON under `yyyy/MM/dd/{SessionId}.json`.
    Application Insights/Azure Monitor telemetry follows the same environment
    boundary and is not registered locally.
-7. MQTT listens on plaintext port 1883 when enabled, accepts protocol levels
-   3, 4, and 5, routes simulated and attacker messages only in process, and
+7. MQTT listens on plaintext port 1883 when enabled, accepts MQTT 3.1.1 (protocol level 4) clean sessions, routes simulated and attacker messages only in process, and
    stores no attacker state across restarts.
 
 ## Configuration and local operation
@@ -140,7 +139,8 @@ capture, emulator behavior, or persistence.
 - Plaintext 1883 only; TLS/8883, WebSockets, MQTT-SN, bridging, and outbound
   connections are out of scope.
 - The broker uses a hand-written bounded codec and session layer rather than a
-  broker library. Protocol levels 3 (`MQIsdp`), 4, and 5 are accepted.
+  broker library. Only MQTT 3.1.1 (level 4) clean sessions are accepted. QoS 0 and 1 are
+  supported; QoS 2 publishes and Wills and persistent-session requests are rejected.
 - Anonymous access is enabled by default; optional `username:password`
   credentials can be configured. Passwords are never written to Information
   logs.

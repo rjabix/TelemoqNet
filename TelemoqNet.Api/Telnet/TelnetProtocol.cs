@@ -13,6 +13,8 @@ public static class TelnetProtocol
     public const byte SE = 240;
 
     public const byte AYT = 246;
+    public const byte EC = 247;
+    public const byte EL = 248;
     public const byte IP = 244;
     public const byte BRK = 243;
 

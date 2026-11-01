@@ -127,6 +127,7 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new VirtualFile("/var", string.Empty, IsDirectory: true),
             new VirtualFile("/var/log", string.Empty, IsDirectory: true),
             new VirtualFile("/etc/hostname", _options.Hostname),
+            new VirtualFile("/etc/device-release", $"MODEL={DeviceIdentity.Model}\nFIRMWARE={DeviceIdentity.FirmwareVersion}\n"),
             new VirtualFile("/etc/passwd",
                 "root:x:0:0:root:/root:/bin/sh\nadmin:x:1000:1000:admin:/home/admin:/bin/sh\n"),
             new VirtualFile("/etc/group", "root:x:0:\nadmin:x:1000:\n"),

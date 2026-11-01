@@ -16,6 +16,8 @@ public sealed class MqttOptions
     public int PayloadCaptureBytes { get; set; } = 1024;
     public int MaxEventsPerSession { get; set; } = 500;
     public int OutboundQueueLength { get; set; } = 64;
+    public int MaxInflightMessages { get; set; } = 64;
+    public int MaxRetainedMessages { get; set; } = 256;
     public bool AllowAnonymous { get; set; } = true;
     public string[] Credentials { get; set; } = [];
     public string BrokerProfile { get; set; } = "SmartHome";
@@ -41,6 +43,8 @@ public sealed class MqttOptionsValidator : IValidateOptions<MqttOptions>
         if (options.PayloadCaptureBytes is < 0 or > 1_048_576) errors.Add("Honeypot:Mqtt:PayloadCaptureBytes must be between 0 and 1048576.");
         if (options.MaxEventsPerSession is < 1 or > 10000) errors.Add("Honeypot:Mqtt:MaxEventsPerSession must be between 1 and 10000.");
         if (options.OutboundQueueLength is < 1 or > 10000) errors.Add("Honeypot:Mqtt:OutboundQueueLength must be between 1 and 10000.");
+        if (options.MaxInflightMessages is < 1 or > 65535) errors.Add("Honeypot:Mqtt:MaxInflightMessages must be between 1 and 65535.");
+        if (options.MaxRetainedMessages is < 1 or > 10000) errors.Add("Honeypot:Mqtt:MaxRetainedMessages must be between 1 and 10000.");
         if (options.SysIntervalSeconds < 1) errors.Add("Honeypot:Mqtt:SysIntervalSeconds must be positive.");
         if (options.ResponseJitterMinMs < 0 || options.ResponseJitterMaxMs < options.ResponseJitterMinMs)
             errors.Add("Honeypot:Mqtt response jitter range is invalid.");

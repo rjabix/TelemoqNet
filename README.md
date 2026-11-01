@@ -11,7 +11,7 @@ Status:
 | Protocol | State |
 | --- | --- |
 | Telnet | Implemented (default port 2323) |
-| MQTT | Implemented (default port 1883) |
+| MQTT | MQTT 3.1.1, clean sessions, QoS 0/1 (default port 1883) |
 
 ## How it works
 
@@ -43,6 +43,33 @@ Connect with `telnet localhost 2323` (or `nc localhost 2323`). The default fake 
 ```bash
 dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj
 ```
+
+## MQTT behavior
+
+The plaintext listener accepts MQTT 3.1.1 (`MQTT`, level 4). MQTT 3.1/5 and
+persistent-session requests receive a refusal; QoS 2 publishes close the connection
+before routing. Subscriptions requesting QoS 2 can be granted QoS 1. CONNECT,
+packet flags, UTF-8 fields, topic filters, and packet IDs are validated against the
+[MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html).
+
+Keepalive, QoS 0/1 Last Will, ordered per-filter SUBACK results, resubscription,
+and retained replay are supported. Outgoing QoS 1 IDs remain in flight until PUBACK.
+Queue or in-flight exhaustion closes the affected connection and records why.
+All session state is discarded at disconnect.
+
+Subscribe to `home/#` for simulated HG-200 gateway metadata and room readings, or
+`$SYS/#` for broker metrics. The same fictional device identity is available in
+Telnet at `/etc/device-release`. Profile publications are retained independently
+of attacker data. Remote retention is disabled by default; enabling
+`Honeypot:Mqtt:GlobalAttackerRetainedEnabled` permits bounded, process-local retention.
+Live deliveries clear RETAIN; subscription replay sets it. Overlapping filters
+produce one live delivery at the highest matching granted QoS.
+
+| MQTT bound | Default |
+| --- | --- |
+| `Honeypot:Mqtt:OutboundQueueLength` | `64` |
+| `Honeypot:Mqtt:MaxInflightMessages` | `64` |
+| `Honeypot:Mqtt:MaxRetainedMessages` (per trusted/attacker map) | `256` |
 
 ## Configuration
 

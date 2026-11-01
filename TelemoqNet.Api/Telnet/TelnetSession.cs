@@ -95,11 +95,7 @@ public sealed class TelnetSession
 
     private async Task NegotiateAsync(CancellationToken cancellationToken)
     {
-        await WriteBytesAsync(new[]
-        {
-            TelnetProtocol.IAC, TelnetProtocol.WILL, TelnetProtocol.SUPPRESS_GO_AHEAD,
-            TelnetProtocol.IAC, TelnetProtocol.WILL, TelnetProtocol.ECHO
-        }, cancellationToken);
+        await _parser.NegotiateAsync(cancellationToken);
         AddEvent("protocol.negotiation", "echo,suppress-go-ahead");
     }
 

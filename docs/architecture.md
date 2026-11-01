@@ -56,11 +56,23 @@ An MQTT session owns the protocol state for one TCP connection:
 
 1. Read packets incrementally from the network stream.
 2. Require `CONNECT` before connected-state packets.
-3. Accept MQTT protocol levels 3, 4, and 5.
+3. Accept MQTT 3.1.1 (protocol level 4), with strict CONNECT field validation.
+   Refuse other versions and requests for persistent sessions.
 4. Dispatch `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PINGREQ`, and
    `DISCONNECT`.
 5. Enqueue responses on a bounded outbound channel.
 6. Persist one `HoneypotSession` when the connection closes.
+
+The session has an absolute lifetime cap and enforces the negotiated keepalive
+at 1.5 times its interval (zero disables keepalive). Only complete control packets
+refresh that deadline. Unexpected disconnects publish a validated QoS 0/1 Last Will;
+a valid DISCONNECT suppresses it.
+
+QoS 1 deliveries allocate nonzero per-client packet IDs and retain them until PUBACK.
+`MaxInflightMessages` bounds that state; exhaustion closes the slow connection.
+Clean sessions discard pending state on disconnect; retransmission across reconnects
+is not supported. QoS 2 publishes and Wills are rejected; subscriptions requesting
+QoS 2 may be granted QoS 1.
 
 The session has an absolute lifetime cap. The outbound writer is a single
 long-running task, which prevents concurrent writes and ensures responses
@@ -89,30 +101,39 @@ subscribers but are not retained across subscriptions unless
   protocol errors into the listener.
 
 `MqttPacketWriter` emits the response packets used by the simulator, including
-CONNACK, PUBLISH, PUBACK/PUBREC/PUBREL/PUBCOMP, SUBACK, UNSUBACK, PINGRESP,
-and MQTT 5 DISCONNECT.
+MQTT 3.1.1 CONNACK, PUBLISH, PUBACK, SUBACK, UNSUBACK, and PINGRESP.
 
 ## Broker state and routing
 
 `BrokerHub` is process-local and singleton-scoped. It maintains:
 
 - Active sessions and their subscriptions.
-- A bounded-by-policy retained-message map.
+- Separate trusted-profile and attacker-retained maps, each capped by
+  `MaxRetainedMessages`; new topics are not retained once the respective map is full.
 - Matching and delivery to subscribed sessions.
 
 `TopicFilter` implements exact topic levels, `+`, and terminal `#`. Leading
 wildcards do not match `$`-prefixed topics. A publish is delivered only to
-matching active sessions; no external broker or network is contacted.
+matching active sessions; no external broker or network is contacted. Overlapping
+filters produce one live delivery at the highest matching granted QoS. SUBACK
+contains one result per requested filter; resubscription replaces its settings.
+Live deliveries clear RETAIN, while subscription replay sets it and preserves the
+minimum of stored and granted QoS. Empty retained publications remove the entry.
 
 `SysTopicPublisher` publishes retained broker telemetry at
 `Honeypot:Mqtt:SysIntervalSeconds`. It exposes version, monotonic uptime,
 connected and total clients, message counts, and byte counts under
 `$SYS/broker/...`. Explicit `$SYS/#` subscriptions receive these messages;
-ordinary `#` subscriptions do not.
+ordinary `#` subscriptions do not. At startup and on each interval it also
+publishes simulated SmartHome readings under `home/livingroom/...` and gateway
+metadata under `home/gateway/...`. The fictional HG-200 model and firmware identity
+agree with Telnet’s `/etc/device-release`. Trusted profile state is independent of
+attacker retention and cannot be overwritten by remote retained publications.
 
 Each session receives through a bounded channel. A slow or non-reading client
 cannot make the broker allocate unbounded outbound memory or block unrelated
-clients. Attacker-retained data is not persisted across process restarts.
+clients. A full queue closes the connection with `outbound_queue_full` instead of
+silently dropping protocol packets. Attacker-retained data is not persisted across process restarts.
 
 ## Session capture and persistence
 
@@ -174,10 +195,10 @@ The suite covers:
 - Existing Telnet regression behavior.
 
 The MQTT implementation is intentionally a bounded protocol subset rather than
-a complete broker. It supports protocol levels 3, 4, and 5, QoS flows used by
-the simulator, subscriptions, retained/system topics, and bounded malformed
-input handling; full MQTT 5 properties, authentication mechanisms beyond
-username/password, and production broker interoperability are out of scope.
+a complete broker. It supports MQTT 3.1.1 clean sessions, QoS 0/1, subscriptions,
+retained/system topics, simulated device readings, and bounded malformed input
+handling. MQTT 3.1, MQTT 5, QoS 2, persistent MQTT sessions, and authentication
+mechanisms beyond username/password are out of scope.
 
 Mosquitto/Testcontainers compatibility tests can be added as an optional
 golden-transcript layer, but a real broker is not required for the normal test

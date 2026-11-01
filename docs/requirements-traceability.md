@@ -9,7 +9,7 @@ requirements and testing chapters.
 | FR-01 | Accept Telnet connections and provide a device-like login flow. | `TelnetServer`, `TelnetSession`, `GenericLinuxDevice` | `TelnetIntegrationTests.LoginAndCommands_AreCapturedAndLogged` |
 | FR-02 | Emulate a bounded BusyBox/Linux command surface. | `GenericLinuxDevice`, `CommandStrategies` | `TelnetIntegrationTests.BusyBoxProbe_ReturnsTerseAppletNotFoundResponse`; `ComponentTests.GenericLinuxDevice_ExecutesOnlySimulatedCommands` |
 | FR-03 | Accept bounded MQTT protocol traffic. | `MqttServer`, `MqttSession`, `MqttPacketReader` | `MqttIntegrationTests`; `ComponentTests.PacketReader_HandlesFragmentedAndCoalescedPackets` |
-| FR-04 | Support MQTT protocol levels 3, 4, and 5 within the documented subset. | `MqttSession`, `MqttPacketWriter` | MQTT integration tests for CONNECT, PUBLISH, SUBSCRIBE, PINGREQ, and DISCONNECT |
+| FR-04 | Support MQTT 3.1.1 clean sessions with QoS 0/1 and explicitly reject unsupported versions and persistence. | `MqttSession`, `MqttPacketWriter` | MQTT integration tests for CONNECT, PUBLISH, SUBSCRIBE, PINGREQ, and DISCONNECT |
 | FR-05 | Capture login attempts, commands, protocol events, and bounded payload metadata. | `HoneypotSession`, session recorders in Telnet/MQTT sessions | Telnet and MQTT session assertions; `ComponentTests.SessionSerialization_PreservesStructuredEvents` |
 | FR-06 | Persist complete session records in structured form. | `LocalCsvSessionStore`, `AzureBlobSessionStore` using managed identity | `AzureBlobIntegrationTests.StoreAsync_PersistsCompleteSessionAsBlobJson` |
 | FR-07 | Enforce connection, packet, line, event, subscription, and queue limits. | `HoneypotOptions`, `MqttOptions`, validators, bounded channels/readers | Oversized input and malformed packet tests; options validator tests |
@@ -26,5 +26,5 @@ requirements and testing chapters.
 The implementation is a low/medium-interaction simulator, not a real shell,
 full MQTT broker, or firmware emulator. It deliberately does not execute
 commands, retrieve payloads, persist attacker-retained state across restarts,
-or implement every MQTT 5 property and authentication mechanism. These are
+or support MQTT 3.1, MQTT 5, QoS 2, persistent MQTT sessions, or advanced authentication. These are
 explicit safety and scope decisions, not unimplemented production features.

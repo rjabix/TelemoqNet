@@ -13,7 +13,7 @@ using Xunit;
 
 namespace TelemoqNet.IntegrationTests;
 
-public sealed class MqttIntegrationTests
+public sealed partial class MqttIntegrationTests
 {
     [Fact]
     public void ProductionConfiguration_BindsMqttAndPassesValidation()
@@ -47,7 +47,7 @@ public sealed class MqttIntegrationTests
         Assert.Equal(3, packet.Type);
         Assert.True((packet.Flags & 1) == 1);
         Assert.Equal("$SYS/broker/version", ReadTopic(packet.Body.AsSpan()));
-        Assert.Equal("TelemoqNet MQTT Broker", Encoding.UTF8.GetString(packet.Body[21..]));
+        Assert.Equal("HG-200 MQTT Service 1.4.2", Encoding.UTF8.GetString(packet.Body[21..]));
     }
 
     [Fact]
@@ -246,15 +246,22 @@ public sealed class MqttIntegrationTests
             ]);
     }
 
-    private static byte[] SubscribePacket(ushort id, string filter) =>
-        Packet(8, [(byte)(id >> 8), (byte)id, 0, (byte)filter.Length, .. Encoding.ASCII.GetBytes(filter), 0], 2);
+    private static byte[] SubscribePacket(ushort id, string filter, byte qos = 0) =>
+        Packet(8, [(byte)(id >> 8), (byte)id, 0, (byte)filter.Length, .. Encoding.ASCII.GetBytes(filter), qos], 2);
 
     private static byte[] PublishPacket(string topic, string payload) =>
         Packet(3, [0, (byte)topic.Length, .. Encoding.ASCII.GetBytes(topic), .. Encoding.UTF8.GetBytes(payload)]);
 
     private static byte[] Packet(byte type, byte[] body, byte flags = 0)
     {
-        var result = new List<byte> { (byte)((type << 4) | flags), (byte)body.Length };
+        var result = new List<byte> { (byte)((type << 4) | flags) };
+        var length = body.Length;
+        do
+        {
+            var digit = length % 128;
+            length /= 128;
+            result.Add((byte)(digit | (length > 0 ? 128 : 0)));
+        } while (length > 0);
         result.AddRange(body);
         return result.ToArray();
     }
@@ -286,12 +293,12 @@ internal sealed class MqttFixture : IAsyncDisposable
     public ConcurrentBag<HoneypotSession> Sessions { get; }
     public ConcurrentBag<string> Logs { get; private set; } = [];
 
-    public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null)
+    public static Task<MqttFixture> StartAsync(Action<MqttOptions>? configure = null, ISessionStore? sessionStore = null)
     {
         var options = new MqttOptions
         {
             Enabled = true,
-            Port = GetFreePort(),
+            Port = 0,
             MaxSessionLifetimeSeconds = 30,
             OutboundQueueLength = 16
         };
@@ -304,11 +311,11 @@ internal sealed class MqttFixture : IAsyncDisposable
         var server = new MqttServer(
             Options.Create(options),
             hub,
-            store,
+            sessionStore ?? store,
             loggerFactory.CreateLogger<MqttServer>(),
             loggerFactory);
         var task = server.RunAsync(stop.Token);
-        var fixture = new MqttFixture(options.Port, task, store, loggerFactory, stop)
+        var fixture = new MqttFixture(server.BoundPort, task, store, loggerFactory, stop)
         {
             Logs = loggerProvider.Messages
         };
@@ -349,14 +356,6 @@ internal sealed class MqttFixture : IAsyncDisposable
         _loggerFactory.Dispose();
     }
 
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
 }
 
 internal sealed class MqttClient : IAsyncDisposable
@@ -387,9 +386,19 @@ internal sealed class MqttClient : IAsyncDisposable
     public async Task<(byte Type, byte Flags, byte[] Body)> ReadPacketAsync(int timeoutMilliseconds = 5000)
     {
         using var timeout = new CancellationTokenSource(timeoutMilliseconds);
-        var header = new byte[2];
+        var header = new byte[1];
         await ReadExactlyAsync(header, timeout.Token);
-        var body = new byte[header[1]];
+        var length = 0;
+        var multiplier = 1;
+        var digit = new byte[1];
+        do
+        {
+            await ReadExactlyAsync(digit, timeout.Token);
+            length += (digit[0] & 127) * multiplier;
+            multiplier *= 128;
+            if (multiplier > 128 * 128 * 128 * 128) throw new InvalidDataException();
+        } while ((digit[0] & 128) != 0);
+        var body = new byte[length];
         await ReadExactlyAsync(body, timeout.Token);
         return ((byte)(header[0] >> 4), (byte)(header[0] & 0x0f), body);
     }

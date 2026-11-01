@@ -21,6 +21,7 @@ public sealed class MqttServer(
     private readonly ConcurrentDictionary<Task, byte> _sessions = new();
 
     public string Name => "MQTT";
+    public int BoundPort { get; private set; }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -32,7 +33,8 @@ public sealed class MqttServer(
 
         var listener = new TcpListener(IPAddress.Any, _options.Port);
         listener.Start();
-        logger.LogInformation("MQTT honeypot listening on port {Port}", _options.Port);
+        BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        logger.LogInformation("MQTT honeypot listening on port {Port}", BoundPort);
         var sysPublisher = new SysTopicPublisher(
             hub,
             _options,
@@ -133,7 +135,8 @@ public sealed class MqttServer(
     private async Task HandleClientAsync(TcpClient client, string ip, CancellationToken cancellationToken)
     {
         await using var stream = client.GetStream();
-        await using var session = new MqttSession(stream, ip, sessionStore, hub, Options.Create(_options),
+        var remoteEndpoint = client.Client.RemoteEndPoint?.ToString() ?? ip;
+        await using var session = new MqttSession(stream, remoteEndpoint, sessionStore, hub, Options.Create(_options),
             loggerFactory.CreateLogger<MqttSession>());
         try
         {

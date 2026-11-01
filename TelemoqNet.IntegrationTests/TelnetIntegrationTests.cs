@@ -15,6 +15,81 @@ namespace TelemoqNet.IntegrationTests;
 public sealed class TelnetIntegrationTests
 {
     [Fact]
+    public async Task ConnectionLimit_RejectsExcessClients()
+    {
+        await using var fixture = await TelnetFixture.StartAsync(o => o.MaxConnections = 1);
+        await using var first = await fixture.ConnectAsync();
+        await first.ReadUntilAsync("login: ");
+        await using var second = await fixture.ConnectAsync();
+        Assert.Equal(0, await second.ReadByteOrEofAsync());
+        await first.LoginAfterPromptAsync();
+        await first.SendLineAsync("exit", useCrNul: true);
+        await fixture.WaitForSessionAsync();
+    }
+
+    [Fact]
+    public async Task Shutdown_CancelsPartialNegotiationAndPersistsSession()
+    {
+        await using var fixture = await TelnetFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+        await client.ReadUntilAsync("login: ");
+        await client.SendBytesAsync(new byte[] { 255, 250, 31 });
+        await fixture.StopAsync();
+        var session = Assert.Single(fixture.Sessions);
+        Assert.Equal("cancelled_or_timeout", session.DisconnectReason);
+        Assert.NotNull(session.EndedAt);
+        Assert.Equal(0, await client.ReadByteOrEofAsync());
+    }
+
+    [Fact]
+    public async Task PersistenceFailure_IsLoggedAndListenerRemainsAvailable()
+    {
+        await using var fixture = await TelnetFixture.StartAsync(failPersistence: true);
+        await using (var first = await fixture.ConnectAsync())
+        {
+            await first.LoginAsync();
+            await first.SendLineAsync("exit", useCrNul: true);
+            Assert.Equal(0, await first.ReadByteOrEofAsync());
+        }
+        Assert.Contains(fixture.Logs, message => message.Contains("Failed to store session"));
+        await using var second = await fixture.ConnectAsync();
+        await second.LoginAsync();
+    }
+
+    [Fact]
+    public async Task TruncatedNegotiation_IsPersistedAsProtocolError()
+    {
+        await using var fixture = await TelnetFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+        await client.ReadUntilAsync("login: ");
+        await client.SendBytesAsync(new byte[] { 255, 253 });
+        client.EndInput();
+        Assert.Equal(0, await client.ReadByteOrEofAsync());
+        var session = await fixture.WaitForSessionAsync();
+        Assert.Equal("protocol_or_transport_error", session.DisconnectReason);
+        Assert.Contains(session.Events, e => e.Type == "connection.error" && e.Detail == "EndOfStreamException");
+    }
+
+    [Fact]
+    public async Task FragmentedNegotiation_ControlsEchoOnTheWire()
+    {
+        await using var fixture = await TelnetFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+        var greeting = await client.ReadBytesUntilAsync("login: ");
+        Assert.Contains(Convert.ToHexString(new byte[] { 255, 251, 3, 255, 251, 1 }),
+            Convert.ToHexString(greeting));
+
+        // Each byte is a separate write, including subnegotiation and escaped IAC.
+        foreach (var value in new byte[] { 255, 253, 1, 255, 253, 1,
+                     255, 250, 31, 0, 255, 255, 0, 255, 240,
+                     (byte)'a', 255, 255, 255, 254, 1, (byte)'b', 255, 246 })
+            await client.SendBytesAsync(new[] { value });
+        Assert.Equal(new byte[] { (byte)'a', 255, 255, 255, 252, 1,
+            13, 10, (byte)'[', (byte)'y', (byte)'e', (byte)'s', (byte)']', 13, 10 },
+            await client.ReadBytesUntilAsync("[yes]\r\n"));
+    }
+
+    [Fact]
     public async Task LoginAndCommands_AreCapturedAndLogged()
     {
         await using var fixture = await TelnetFixture.StartAsync();
@@ -139,6 +214,8 @@ public sealed class TelnetIntegrationTests
 
         await client.SendLineAsync("exit", useCrNul: true);
         var session = await fixture.WaitForSessionAsync();
+        Assert.Equal(new[] { "true", "exit" }, session.Commands.Select(command => command.Command));
+        Assert.Single(session.Events, sessionEvent => sessionEvent.Type == "protocol.error");
         Assert.Contains(
             session.Events,
             sessionEvent => sessionEvent.Type == "protocol.error"
@@ -202,7 +279,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
     public ConcurrentBag<string> Logs { get; }
 
     public static async Task<TelnetFixture> StartAsync(
-        Action<HoneypotOptions>? configure = null)
+        Action<HoneypotOptions>? configure = null, bool failPersistence = false)
     {
         var options = new HoneypotOptions
         {
@@ -213,7 +290,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
         configure?.Invoke(options);
 
         var profileFactory = new TestProfileFactory(options);
-        var sessionStore = new CapturingSessionStore();
+        var sessionStore = new CapturingSessionStore { FailPersistence = failPersistence };
         var loggerProvider = new CapturingLoggerProvider();
         var loggerFactory = LoggerFactory.Create(builder =>
             builder.AddProvider(loggerProvider));
@@ -257,7 +334,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
         throw new TimeoutException("The Telnet session was not persisted.");
     }
 
-    public async ValueTask DisposeAsync()
+    public async Task StopAsync()
     {
         _stop.Cancel();
         try
@@ -268,6 +345,11 @@ internal sealed class TelnetFixture : IAsyncDisposable
         {
         }
 
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
         _stop.Dispose();
         _loggerFactory.Dispose();
     }
@@ -309,10 +391,39 @@ internal sealed class TelnetClient : IAsyncDisposable
     public async Task LoginAsync()
     {
         await ReadUntilAsync("login: ");
+        await LoginAfterPromptAsync();
+    }
+
+    public async Task LoginAfterPromptAsync()
+    {
         await SendLineAsync("root", useCrNul: true);
         await ReadUntilAsync("Password: ");
         await SendLineAsync("root", useCrNul: true);
         await ReadUntilAsync("# ");
+    }
+
+    public void EndInput() => _client.Client.Shutdown(SocketShutdown.Send);
+
+    public async Task<int> ReadByteOrEofAsync()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        return await _stream.ReadAsync(new byte[1], timeout.Token);
+    }
+
+    public async Task SendBytesAsync(byte[] bytes) => await _stream.WriteAsync(bytes);
+
+    public async Task<byte[]> ReadBytesUntilAsync(string expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var bytes = new List<byte>();
+        var buffer = new byte[1];
+        while (!Encoding.Latin1.GetString(bytes.ToArray()).EndsWith(expected, StringComparison.Ordinal))
+        {
+            if (await _stream.ReadAsync(buffer, timeout.Token) == 0)
+                throw new EndOfStreamException();
+            bytes.Add(buffer[0]);
+        }
+        return bytes.ToArray();
     }
 
     public async Task SendLineAsync(string value, bool useCrNul)
@@ -362,6 +473,8 @@ internal sealed class TestProfileFactory(HoneypotOptions options)
 
 internal sealed class CapturingSessionStore : ISessionStore
 {
+    public bool FailPersistence { get; init; }
+
     public ConcurrentBag<HoneypotSession> Sessions { get; } = [];
 
     public Task StoreAsync(
@@ -369,6 +482,7 @@ internal sealed class CapturingSessionStore : ISessionStore
         CancellationToken cancellationToken)
     {
         Sessions.Add(session);
+        if (FailPersistence) throw new IOException("Test persistence failure");
         return Task.CompletedTask;
     }
 }

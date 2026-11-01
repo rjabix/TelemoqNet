@@ -5,15 +5,11 @@ namespace TelemoqNet.Api.Mqtt.Protocol;
 
 public static class MqttPacketWriter
 {
-    public static byte[] ConnAck(MqttProtocolLevel level, bool sessionPresent, byte reason = 0) =>
-        Packet(2, [(byte)(sessionPresent ? 1 : 0), reason, ..(level == MqttProtocolLevel.V5 ? new byte[] { 0 } : [])]);
+    public static byte[] ConnAck(bool sessionPresent = false, byte reason = 0) =>
+        Packet(2, [(byte)(sessionPresent ? 1 : 0), reason]);
 
     public static byte[] PingResp() => [0xd0, 0];
-    public static byte[] Disconnect(MqttProtocolLevel level, byte reason = 0) =>
-        level == MqttProtocolLevel.V5 ? Packet(14, [reason, 0]) : [0xe0, 0];
-
-    public static byte[] PubAck(ushort id, byte type = 4) =>
-        Packet(type, [..U16(id)]);
+    public static byte[] PubAck(ushort id) => Packet(4, U16(id));
 
     public static byte[] SubAck(ushort id, IReadOnlyList<byte> results) =>
         Packet(9, [..U16(id), ..results]);
@@ -22,6 +18,8 @@ public static class MqttPacketWriter
 
     public static byte[] Publish(string topic, ReadOnlySpan<byte> payload, byte qos = 0, bool retain = false, ushort packetId = 0)
     {
+        if (qos > 1) throw new ArgumentOutOfRangeException(nameof(qos));
+        if (qos > 0 && packetId == 0) throw new ArgumentOutOfRangeException(nameof(packetId));
         var body = new List<byte>(Encoding.UTF8.GetByteCount(topic) + payload.Length + 4);
         AddString(body, topic);
         if (qos > 0) body.AddRange(U16(packetId));

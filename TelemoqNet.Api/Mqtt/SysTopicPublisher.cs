@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using TelemoqNet.Api.Configuration;
+using TelemoqNet.Api.Emulation;
 using TelemoqNet.Api.Mqtt.Broker;
 
 namespace TelemoqNet.Api.Mqtt;
@@ -18,6 +19,7 @@ public sealed class SysTopicPublisher(
             "MQTT $SYS publisher started with interval {IntervalSeconds}s",
             options.SysIntervalSeconds);
 
+        PublishSnapshot();
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(options.SysIntervalSeconds));
         while (await timer.WaitForNextTickAsync(cancellationToken))
             PublishSnapshot();
@@ -28,7 +30,7 @@ public sealed class SysTopicPublisher(
         var uptime = (long)(DateTimeOffset.UtcNow - _bootTime).TotalSeconds;
         var metrics = new[]
         {
-            ("version", "TelemoqNet MQTT Broker"),
+            ("version", DeviceIdentity.MqttVersion),
             ("uptime", uptime.ToString(CultureInfo.InvariantCulture)),
             ("clients/connected", hub.ConnectedClients.ToString(CultureInfo.InvariantCulture)),
             ("clients/total", hub.TotalConnections.ToString(CultureInfo.InvariantCulture)),
@@ -40,6 +42,13 @@ public sealed class SysTopicPublisher(
 
         foreach (var (name, value) in metrics)
             Publish($"$SYS/broker/{name}", value);
+
+        // Fixed profile topics only. Values are simulated locally and never trigger device actions.
+        Publish("home/gateway/model", DeviceIdentity.Model);
+        Publish("home/gateway/firmware", DeviceIdentity.FirmwareVersion);
+        Publish("home/gateway/status", "online");
+        Publish("home/livingroom/temperature", (21.5 + Math.Sin(uptime / 60.0) * 0.4).ToString("F1", CultureInfo.InvariantCulture));
+        Publish("home/livingroom/humidity", "44");
     }
 
     private void Publish(string topic, string payload) =>
