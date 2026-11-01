@@ -38,7 +38,10 @@ use that identity. `Honeypot:Hostname` overrides the hostname across both protoc
 Simulated `netstat` shows the device's public Telnet port 23 (the deployment maps
 it to application port 2323) and the configured MQTT port when MQTT is enabled.
 
-`wget`, `curl`, and `busybox wget` return a plausible network-unreachable error.
+`wget`, `curl`, and `busybox wget` support help (`--help`, `-h`) and version
+(`--version`, `-V`) output. Other invocations report a usage error when no URL is
+supplied; with a destination they return a plausible network-unreachable error.
+Help and version requests do not create download-attempt events.
 Recognized absolute HTTP(S), FTP, and TFTP URL operands produce ordered
 `payload.download_attempt` session events, for example:
 
