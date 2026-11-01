@@ -1,5 +1,8 @@
 # Query captured sessions in Azure Portal
 
+For Workbook filters and copyable KQL/CLI examples, see
+[Query captured sessions yourself](querying-sessions.md).
+
 Terraform manages retained analysis tables, a DCR, saved KQL and a Workbook.
 An independent bounded Python importer reads private session blobs, using a
 separate managed identity and subnet. Source access stays read-only, and no
@@ -299,7 +302,13 @@ normal charts. Synthetic validation never writes or changes source blobs.
 
 ## Queries, graphs, and partial delivery
 
-`HoneypotRows(SessionStart, SessionEnd, SelectedProtocol, SelectedSession)` has optional parameters; `HoneypotRows()` remains compatible. Filters apply before completeness checks and only narrow complete-run keys are materialized. It deduplicates retries by source version, run, entity kind, record
+`HoneypotRows(SessionStart, SessionEnd, SelectedProtocol, SelectedSession,
+SelectedIp, SelectedCountry, SelectedCity, SelectedAuthentication)` has optional
+parameters; existing zero- and four-argument calls remain compatible. Time,
+protocol and session ID filters apply before completeness checks. IP, country,
+city and authentication filters select complete sessions afterwards, retaining
+their child records and chunks. Only narrow keys and session metadata are
+materialized. It deduplicates retries by source version, run, entity kind, record
 index, and chunk index. It includes only runs whose observed rows exactly match
 the status marker's expected count, then chooses the latest complete run for
 each source version. Concurrent/repeated imports can create physical duplicates
@@ -312,10 +321,19 @@ before other streams, the delivery query shows partial data until all rows
 arrive. The API does not provide a cross-table transaction. Stop executions
 before disabling resources; removal of a table deletes its analysis copy.
 
-The Workbook has session-date, protocol, and session-ID filters. Workspace time
-is import time; `StartedAt` is the original session time. Charts cover traffic
+The Workbook retains session-date, protocol, and session-ID filters, and adds
+source IP, country, city and session authentication outcome. All session panels
+use the combined filters; Import delivery status remains unfiltered. Source IPs
+are normalized without client ports, including IPv6/mapped IPv4 endpoints.
+Country, city and approximate coordinates come from Azure Monitor's built-in
+[IP geolocation function](https://learn.microsoft.com/en-us/kusto/query/geo-info-from-ip-address-function)
+at query time, including for previously imported data, without extra API keys
+or importer egress. Unresolved locations display `Unknown`; coordinates may be
+absent. Locations describe the network endpoint, not a person's physical address.
+Workspace time is import time; `StartedAt` is the original session time. Charts cover traffic
 over time, authentication outcomes, source addresses (client ports removed),
-usernames, commands, MQTT event types, session details, and import delivery.
+usernames, commands, MQTT event types, country/city locations, session details,
+and import delivery.
 Default views omit captured passwords, but authorized readers of raw login
 payloads can access them. Grant workspace access accordingly.
 
@@ -337,8 +355,9 @@ python3 tools/session-importer/validate_queries.py WORKSPACE_CUSTOMER_ID
 ```
 
 This requires an Azure CLI login with workspace query access. It submits only
-synthetic `datatable` queries and checks duplicate/partial-run selection and
-payload reconstruction as well as compiling every saved query.
+synthetic `datatable` queries and checks duplicate/partial-run selection, endpoint
+normalization, session filters (including child records), unresolved locations
+and payload reconstruction as well as compiling every saved query.
 
 Before a real-data import, deploy a bounded synthetic fixture through an
 administrative identity with source write permission, verify private DNS,

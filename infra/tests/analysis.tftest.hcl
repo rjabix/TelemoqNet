@@ -92,6 +92,33 @@ run "manual_runtime" {
   }
 }
 
+// All providers are mocked: inspect the rendered workbook without Azure writes.
+run "workbook_session_filters" {
+  command = apply
+  plan_options {
+    target = [azurerm_application_insights_workbook.analysis]
+  }
+  assert {
+    condition = alltrue([for name in ["Start", "End", "Protocol", "SessionId", "SourceIp", "Country", "City", "Authentication"] : contains(
+      [for parameter in jsondecode(azurerm_application_insights_workbook.analysis[0].data_json).items[1].content.parameters : parameter.name], name
+    )])
+    error_message = "The workbook must retain time, protocol and session ID filters alongside IP, location and authentication filters."
+  }
+  assert {
+    condition = alltrue([for item in jsondecode(azurerm_application_insights_workbook.analysis[0].data_json).items :
+      alltrue([for filter in ["Start", "End", "Protocol", "SessionId", "SourceIp", "Country", "City", "Authentication"] : strcontains(item.content.query, "{${filter}:escape}")])
+      if item.type == 3 && try(item.content.title != "Import delivery status", false)
+    ])
+    error_message = "Every session panel must pass all filters to HoneypotRows."
+  }
+  assert {
+    condition = length([for item in jsondecode(azurerm_application_insights_workbook.analysis[0].data_json).items : item
+      if item.type == 3 && try(item.content.title == "Source countries and cities", false)
+    ]) == 1
+    error_message = "The workbook must include the country/city location panel."
+  }
+}
+
 run "scheduled_runtime" {
   command = plan
   variables {

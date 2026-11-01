@@ -210,6 +210,10 @@ be removed explicitly for a deliberate full teardown.
 
 ## Analyze captured sessions
 
+The [query guide](docs/querying-sessions.md) explains the Workbook's time,
+protocol, session ID, IP, country/city and authentication filters, with KQL and
+CLI examples for investigating sessions yourself.
+
 Use the [analysis operating guide](docs/session-analysis.md) to set up private
 Blob ingestion into Log Analytics and the Azure Portal Workbook. Run this when
 you want new data imported. It handles image publication, backend setup/state

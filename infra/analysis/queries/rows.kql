@@ -1,4 +1,6 @@
 // Filter every entity and marker consistently before completeness checks.
+// Session metadata filters apply AFTER complete-run selection and carry every
+// matching session's commands, events, logins and chunks into the result.
 // Only narrow keys are cached; payloads/chunks are fetched after selecting runs.
 let candidates = () {
     union HoneypotSessions_CL, HoneypotLogins_CL, HoneypotCommands_CL,
@@ -23,9 +25,44 @@ let complete = materialize(candidates()
     | where ActualRows == ExpectedRows
     | summarize arg_max(ImportTime, ImportRunId) by SourceBlob, SourceETag
     | project SourceBlob, SourceETag, ImportRunId);
+let sessions = materialize(HoneypotSessions_CL
+    | where StartedAt >= SessionStart and StartedAt < SessionEnd
+    | where SelectedProtocol == 'all' or Protocol == SelectedProtocol
+    | where isempty(SelectedSession) or SessionId == SelectedSession
+    | join kind=inner complete on SourceBlob, SourceETag, ImportRunId
+    | summarize arg_max(TimeGenerated, Payload) by SourceBlob, SourceETag, ImportRunId
+    | extend RemoteEndpoint=tostring(Payload.RemoteEndpoint),
+             AuthenticationSucceeded=tobool(Payload.AuthenticationSucceeded)
+    // Strip only an actual endpoint port; preserve bare IPv6 addresses.
+    | extend SourceAddress=case(
+        RemoteEndpoint startswith '[', extract(@'^\[([^\]]+)\](?::\d+)?$', 1, RemoteEndpoint),
+        RemoteEndpoint matches regex @'^\d{1,3}(?:\.\d{1,3}){3}:\d+$', extract(@'^([^:]+):\d+$', 1, RemoteEndpoint),
+        RemoteEndpoint)
+    // .NET can represent an IPv4 peer as an IPv4-mapped IPv6 address.
+    | extend SourceAddress=coalesce(extract(@'(?i)^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$', 1, SourceAddress), SourceAddress)
+    | where isempty(SelectedIp) or (isnotempty(parse_ipv6(SelectedIp)) and parse_ipv6(SourceAddress) == parse_ipv6(SelectedIp))
+    | where SelectedAuthentication == 'all'
+        or (SelectedAuthentication == 'successful' and AuthenticationSucceeded == true)
+        or (SelectedAuthentication == 'failed' and AuthenticationSucceeded == false)
+        or (SelectedAuthentication == 'unknown' and isnull(AuthenticationSucceeded))
+    | project SourceBlob, SourceETag, ImportRunId, SourceAddress, AuthenticationSucceeded);
+// Resolve once per distinct source address in this query, including old imports.
+let locations = sessions
+    | distinct SourceAddress
+    | extend Geo=geo_info_from_ip_address(SourceAddress)
+    | project SourceAddress, Country=coalesce(tostring(Geo.country), 'Unknown'),
+              City=coalesce(tostring(Geo.city), 'Unknown'),
+              Latitude=todouble(Geo.latitude), Longitude=todouble(Geo.longitude)
+    | where isempty(SelectedCountry) or Country =~ SelectedCountry
+    | where isempty(SelectedCity) or City =~ SelectedCity;
+let selectedSessions = sessions
+    | join kind=inner locations on SourceAddress
+    | project SourceBlob, SourceETag, ImportRunId, SourceAddress,
+              Country, City, Latitude, Longitude, AuthenticationSucceeded;
 candidates()
-| join kind=inner complete on SourceBlob, SourceETag, ImportRunId
+| join kind=inner selectedSessions on SourceBlob, SourceETag, ImportRunId
 | summarize arg_max(TimeGenerated, *) by SourceBlob, SourceETag, ImportRunId, EntityKind, RecordIndex, ChunkIndex
 | project TimeGenerated, SessionId, StartedAt, Protocol, SourceBlob, SourceETag,
           ImportRunId, EntityKind, RecordIndex, ChunkIndex, ChunkData, PayloadHash,
-          Payload, HasChunks
+          Payload, HasChunks, SourceAddress, Country, City, Latitude, Longitude,
+          AuthenticationSucceeded

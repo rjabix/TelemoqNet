@@ -1,7 +1,8 @@
 HoneypotRows()
 | where EntityKind == 'Sessions'
 | project StartedAt, SessionId, Protocol, RemoteEndpoint=tostring(Payload.RemoteEndpoint),
-          Username=tostring(Payload.Username), AuthenticationSucceeded=tobool(Payload.AuthenticationSucceeded),
+          SourceAddress, Country, City, Latitude, Longitude,
+          Username=tostring(Payload.Username), AuthenticationSucceeded,
           DisconnectReason=tostring(Payload.DisconnectReason), HasChunks
 | order by StartedAt desc
 | take 500

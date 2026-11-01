@@ -46,6 +46,7 @@ locals {
     traffic        = { title = "Sessions over time", file = "traffic.kql" }
     authentication = { title = "Authentication outcomes", file = "authentication.kql" }
     sources        = { title = "Source addresses", file = "sources.kql" }
+    locations      = { title = "Source countries and cities", file = "locations.kql" }
     usernames      = { title = "Login usernames", file = "usernames.kql" }
     commands       = { title = "Captured commands", file = "commands.kql" }
     mqtt           = { title = "MQTT event types", file = "mqtt.kql" }
@@ -226,7 +227,7 @@ resource "azurerm_log_analytics_saved_search" "analysis_rows" {
   category                   = "Honeypot sessions"
   display_name               = "Complete deduplicated session records"
   function_alias             = "HoneypotRows"
-  function_parameters        = ["SessionStart:datetime=datetime(2000-01-01)", "SessionEnd:datetime=datetime(2100-01-01)", "SelectedProtocol:string='all'", "SelectedSession:string=''"]
+  function_parameters        = ["SessionStart:datetime=datetime(2000-01-01)", "SessionEnd:datetime=datetime(2100-01-01)", "SelectedProtocol:string='all'", "SelectedSession:string=''", "SelectedIp:string=''", "SelectedCountry:string=''", "SelectedCity:string=''", "SelectedAuthentication:string='all'"]
   query                      = file("${path.module}/analysis/queries/rows.kql")
   depends_on                 = [azapi_resource.analysis_table]
 }
@@ -251,7 +252,7 @@ resource "azurerm_application_insights_workbook" "analysis" {
   data_json = jsonencode({
     version = "Notebook/1.0"
     items = concat([
-      { type = 1, content = { json = "# Captured honeypot sessions\nNew captured data appears after a verified import. Only complete imports appear in session charts. Large record previews are marked; use the reconstruction query for full text. Workspace time is import time; Start/End below filter original session time." } },
+      { type = 1, content = { json = "# Captured honeypot sessions\nNew captured data appears after a verified import. Only complete imports appear in session charts. Filters select whole sessions, including their commands and events. IP locations are approximate; private/unresolved addresses show Unknown. Large record previews are marked; use the reconstruction query for full text. Workspace time is import time; Start/End below filter original session time. Import delivery status is an unfiltered operational view." } },
       { type = 9, content = {
         version = "KqlParameterItem/1.0"
         parameters = [
@@ -259,15 +260,19 @@ resource "azurerm_application_insights_workbook" "analysis" {
           { id = "end", name = "End", type = 1, value = "2100-01-01T00:00:00Z", label = "Session end (UTC, exclusive)" },
           { id = "protocol", name = "Protocol", type = 2, value = "all", jsonData = jsonencode([{ value = "all", label = "All" }, { value = "telnet", label = "Telnet" }, { value = "mqtt", label = "MQTT" }]) },
           { id = "session", name = "SessionId", type = 1, value = "", label = "Session ID (blank for all)" },
+          { id = "ip", name = "SourceIp", type = 1, value = "", label = "Source IP (exact IPv4/IPv6, no port; blank for all)" },
+          { id = "country", name = "Country", type = 1, value = "", label = "Country (e.g. Poland or Unknown; blank for all)" },
+          { id = "city", name = "City", type = 1, value = "", label = "City (exact name or Unknown; blank for all)" },
+          { id = "authentication", name = "Authentication", type = 2, value = "all", label = "Session authentication", jsonData = jsonencode([{ value = "all", label = "All sessions" }, { value = "successful", label = "Successful login sessions" }, { value = "failed", label = "Failed login sessions" }, { value = "unknown", label = "No recorded authentication outcome" }]) },
         ]
         style = "pills"
       } },
-      ], [for key in ["traffic", "authentication", "sources", "usernames", "commands", "mqtt", "sessions", "details", "imports"] : {
+      ], [for key in ["traffic", "authentication", "sources", "locations", "usernames", "commands", "mqtt", "sessions", "details", "imports"] : {
         type = 3
         content = {
           version                 = "KqlItem/1.0"
           title                   = local.analysis_queries[key].title
-          query                   = key == "imports" ? file("${path.module}/analysis/queries/imports.kql") : replace(file("${path.module}/analysis/queries/${local.analysis_queries[key].file}"), "HoneypotRows()", "HoneypotRows(todatetime('{Start:escape}'), todatetime('{End:escape}'), '{Protocol:escape}', '{SessionId:escape}')")
+          query                   = key == "imports" ? file("${path.module}/analysis/queries/imports.kql") : replace(file("${path.module}/analysis/queries/${local.analysis_queries[key].file}"), "HoneypotRows()", "HoneypotRows(todatetime('{Start:escape}'), todatetime('{End:escape}'), '{Protocol:escape}', '{SessionId:escape}', '{SourceIp:escape}', '{Country:escape}', '{City:escape}', '{Authentication:escape}')")
           queryType               = 0
           resourceType            = "microsoft.operationalinsights/workspaces"
           crossComponentResources = [azurerm_log_analytics_workspace.main.id]
