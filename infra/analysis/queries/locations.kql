@@ -1,0 +1,8 @@
+// Approximate network locations; coordinates do not identify an attacker/address.
+HoneypotRows()
+| where EntityKind == 'Sessions'
+| summarize Sessions=count(), SourceIPs=dcount(SourceAddress),
+            SuccessfulSessions=countif(AuthenticationSucceeded == true)
+    by Country, City, Latitude, Longitude
+| order by Sessions desc
+| take 500

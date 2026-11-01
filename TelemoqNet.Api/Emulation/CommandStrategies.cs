@@ -6,7 +6,8 @@ public sealed class CommandContext(
     Action reboot,
     Func<string> currentDirectory,
     Func<string, string> resolvePath,
-    Func<string, bool> changeDirectory)
+    Func<string, bool> changeDirectory,
+    string hostname)
 {
     public VirtualFileSystem FileSystem { get; } = fileSystem;
     public Func<string> Uptime { get; } = uptime;
@@ -14,6 +15,7 @@ public sealed class CommandContext(
     public string CurrentDirectory => currentDirectory();
     public Func<string, string> ResolvePath { get; } = resolvePath;
     public Func<string, bool> ChangeDirectory { get; } = changeDirectory;
+    public string Hostname { get; } = hostname;
 }
 
 public interface IDeviceCommand
@@ -62,10 +64,14 @@ public sealed class EchoCommand : IDeviceCommand
         CommandContext context)
     {
         if (redirectIndex == arguments.Length - 1)
+        {
             return "sh: syntax error: missing file operand";
+        }
 
         if (redirectIndex != arguments.Length - 2)
+        {
             return "sh: syntax error near unexpected token";
+        }
 
         var content = string.Join(' ', arguments[..redirectIndex]) + "\n";
         var path = context.ResolvePath(arguments[^1]);
@@ -105,7 +111,9 @@ public sealed class ChangeDirectoryCommand : IDeviceCommand
     private static string ChangeDirectory(string target, string path, CommandContext context)
     {
         if (context.FileSystem.Contains(path) && !context.FileSystem.IsDirectory(path))
+        {
             return $"sh: cd: {target}: Not a directory";
+        }
 
         return context.ChangeDirectory(path)
             ? string.Empty
@@ -123,7 +131,9 @@ public sealed class FileCommand : IDeviceCommand
         CancellationToken cancellationToken)
     {
         if (arguments.Length != 1)
+        {
             return Task.FromResult<string?>("cat: usage: cat FILE");
+        }
 
         var path = context.ResolvePath(arguments[0]);
         var response = context.FileSystem.TryRead(path, out var value)
@@ -144,7 +154,9 @@ public sealed class TouchCommand : IDeviceCommand
         CancellationToken cancellationToken)
     {
         if (arguments.Length == 0)
+        {
             return Task.FromResult<string?>("touch: missing file operand");
+        }
 
         return Task.FromResult<string?>(TouchFiles(arguments, context));
     }
@@ -154,7 +166,9 @@ public sealed class TouchCommand : IDeviceCommand
         foreach (var path in paths)
         {
             if (!context.FileSystem.Touch(context.ResolvePath(path)))
+            {
                 return $"touch: cannot touch '{path}': Is a directory";
+            }
         }
 
         return string.Empty;
@@ -172,7 +186,9 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
     {
         var paths = arguments.Where(argument => !argument.StartsWith('-')).ToArray();
         if (paths.Length == 0)
+        {
             return Task.FromResult<string?>("mkdir: missing operand");
+        }
 
         return Task.FromResult<string?>(CreateDirectories(paths, context));
     }
@@ -182,7 +198,9 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
         foreach (var path in paths)
         {
             if (!context.FileSystem.AddDirectory(context.ResolvePath(path)))
+            {
                 return $"mkdir: cannot create directory '{path}': File exists";
+            }
         }
 
         return string.Empty;
@@ -211,7 +229,7 @@ public sealed class SystemInfoCommand : IDeviceCommand
         CancellationToken cancellationToken) =>
         Task.FromResult<string?>(
             arguments.SequenceEqual(["-a"])
-                ? "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
+                ? $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
                 : "Linux");
 }
 
@@ -225,8 +243,9 @@ public sealed class BusyBoxCommand : IDeviceCommand
         CancellationToken cancellationToken)
     {
         if (arguments.Length == 0)
-            return Task.FromResult<string?>(
-                "BusyBox v1.19.4 (built-in shell commands)");
+        {
+            return Task.FromResult<string?>("BusyBox v1.19.4 (built-in shell commands)");
+        }
 
         var applet = arguments[0];
         var appletArguments = arguments.Skip(1).ToArray();
@@ -243,7 +262,8 @@ public sealed class BusyBoxCommand : IDeviceCommand
             "echo" => string.Join(' ', arguments),
             "cat" when TryReadFile(arguments, context, out var contents) =>
                 contents.TrimEnd('\r', '\n'),
-            "uname" => "Linux router 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
+            "uname" => $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
+            "wget" => DownloadCommand.Response("wget"),
             "true" or "false" or "sh" or "ls" or "mkdir" or "touch" => string.Empty,
             _ => $"{applet}: applet not found"
         };
@@ -257,6 +277,21 @@ public sealed class BusyBoxCommand : IDeviceCommand
         return arguments.Length == 1 &&
                context.FileSystem.TryRead(context.ResolvePath(arguments[0]), out contents);
     }
+}
+
+public sealed class DownloadCommand(string name) : IDeviceCommand
+{
+    public string Name => name;
+
+    public Task<string?> ExecuteAsync(
+        string[] arguments,
+        CommandContext context,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(Response(Name));
+
+    internal static string Response(string tool) => tool == "wget"
+        ? "wget: can't connect to remote host: Network is unreachable"
+        : "curl: (7) Failed to connect to host: Network is unreachable";
 }
 
 public sealed class SimpleResponseCommand(

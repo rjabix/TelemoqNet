@@ -24,8 +24,14 @@ public class Worker : BackgroundService
     {
         while (!token.IsCancellationRequested)
         {
-            try { await server.RunAsync(token); }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+            try
+            {
+                await server.RunAsync(token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "{ProtocolServer} stopped unexpectedly; restarting", server.Name);

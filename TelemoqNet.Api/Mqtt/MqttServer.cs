@@ -13,7 +13,8 @@ public sealed class MqttServer(
     BrokerHub hub,
     ISessionStore sessionStore,
     ILogger<MqttServer> logger,
-    ILoggerFactory loggerFactory) : IProtocolServer
+    ILoggerFactory loggerFactory,
+    IOptions<HoneypotOptions>? deviceOptions = null) : IProtocolServer
 {
     private readonly MqttOptions _options = options.Value;
     private readonly SemaphoreSlim _limiter = new(options.Value.MaxConnections);
@@ -38,7 +39,8 @@ public sealed class MqttServer(
         var sysPublisher = new SysTopicPublisher(
             hub,
             _options,
-            loggerFactory.CreateLogger<SysTopicPublisher>());
+            loggerFactory.CreateLogger<SysTopicPublisher>(),
+            deviceOptions?.Value.Hostname ?? Emulation.DeviceIdentity.Hostname);
         var sysTask = sysPublisher.RunAsync(cancellationToken);
         try
         {
@@ -67,7 +69,9 @@ public sealed class MqttServer(
         {
             var client = await AcceptClientAsync(listener, cancellationToken);
             if (client is not null)
+            {
                 await AdmitClientAsync(client, cancellationToken);
+            }
         }
     }
 
@@ -113,7 +117,10 @@ public sealed class MqttServer(
             "Rejected MQTT connection from {RemoteAddress}; global or per-IP limit reached",
             key);
         client.Dispose();
-        if (slotAcquired) _limiter.Release();
+        if (slotAcquired)
+        {
+            _limiter.Release();
+        }
     }
 
     private void TrackClient(TcpClient client, string key, CancellationToken cancellationToken)
@@ -154,13 +161,23 @@ public sealed class MqttServer(
         {
             if (!_perIp.TryGetValue(key, out var current))
             {
-                if (_perIp.TryAdd(key, 1)) return true;
+                if (_perIp.TryAdd(key, 1))
+                {
+                    return true;
+                }
+
                 continue;
             }
 
-            if (current >= _options.MaxConnectionsPerIp) return false;
+            if (current >= _options.MaxConnectionsPerIp)
+            {
+                return false;
+            }
+
             if (_perIp.TryUpdate(key, current + 1, current))
+            {
                 return true;
+            }
         }
     }
 }

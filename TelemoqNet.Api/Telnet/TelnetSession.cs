@@ -102,17 +102,34 @@ public sealed class TelnetSession
         for (var attempt = 1; attempt <= _options.MaxAuthenticationAttempts; attempt++)
         {
             var credentials = await ReadCredentialsAsync(cancellationToken);
-            if (credentials is null) return false;
-            if (credentials.Value.Retry) continue;
+            if (credentials is null)
+            {
+                return false;
+            }
+
+            if (credentials.Value.Retry)
+            {
+                continue;
+            }
 
             var username = credentials.Value.Username;
             var password = credentials.Value.Password;
             var success = RecordAuthenticationAttempt(username, password, attempt);
-            if (success) return true;
+            if (success)
+            {
+                return true;
+            }
+
             await SendAsync("\r\nLogin incorrect\r\n", cancellationToken);
-            if (_options.CloseOnAuthenticationFailure) break;
+            if (_options.CloseOnAuthenticationFailure)
+            {
+                break;
+            }
+
             if (attempt < _options.MaxAuthenticationAttempts)
+            {
                 await Task.Delay(_options.AuthenticationRetryDelayMilliseconds, cancellationToken);
+            }
         }
 
         return false;
@@ -123,7 +140,11 @@ public sealed class TelnetSession
     {
         await SendAsync("login: ", cancellationToken);
         var username = await _parser.ReadLineAsync(true, cancellationToken);
-        if (username.EndOfStream) return null;
+        if (username.EndOfStream)
+        {
+            return null;
+        }
+
         if (username.TooLong)
         {
             _session.AuthenticationFailureReason = "line_too_long";
@@ -133,7 +154,11 @@ public sealed class TelnetSession
 
         await SendAsync("\r\nPassword: ", cancellationToken);
         var password = await _parser.ReadLineAsync(false, cancellationToken);
-        if (password.EndOfStream) return null;
+        if (password.EndOfStream)
+        {
+            return null;
+        }
+
         if (password.TooLong)
         {
             _session.AuthenticationFailureReason = "line_too_long";
@@ -179,7 +204,9 @@ public sealed class TelnetSession
         {
             var result = await _parser.ReadLineAsync(true, cancellationToken);
             if (await HandleShellResultAsync(result, cancellationToken))
+            {
                 break;
+            }
         }
     }
 
@@ -230,7 +257,10 @@ public sealed class TelnetSession
         _logger.LogInformation("Session {SessionId} command: {Command}", _session.SessionId, command);
         AddEvent("command.received", command);
         EmulationMetrics.Commands.Add(1);
-        var response = await _device.ExecuteCommandAsync(command, cancellationToken);
+        var response = await _device.ExecuteCommandAsync(command, cancellationToken, attempt =>
+            _session.Events.Add(new SessionEvent(
+                ++_eventSequence, "payload.download_attempt", DateTimeOffset.UtcNow,
+                DownloadAttempt: attempt)));
         _session.Commands.Add(new CommandEvent(command, DateTimeOffset.UtcNow, response));
         AddEvent("command.completed", response is null ? "session_closed" : "response");
         if (response is null)

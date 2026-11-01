@@ -8,7 +8,10 @@ public sealed class VirtualFileSystem
     public void Add(VirtualFile file)
     {
         _files[Normalize(file.Path)] =
-            file with { Path = Normalize(file.Path) };
+            file with
+            {
+                Path = Normalize(file.Path)
+            };
     }
 
     public bool Contains(string path) =>
@@ -23,7 +26,9 @@ public sealed class VirtualFileSystem
         var normalized = Normalize(path);
 
         if (_files.ContainsKey(normalized))
+        {
             return false;
+        }
 
         Add(new VirtualFile(normalized, string.Empty, IsDirectory: true));
         return true;
@@ -36,7 +41,9 @@ public sealed class VirtualFileSystem
         if (_files.TryGetValue(normalized, out var file))
         {
             if (file.IsDirectory)
+            {
                 return false;
+            }
 
             return true;
         }
@@ -52,7 +59,9 @@ public sealed class VirtualFileSystem
         if (_files.TryGetValue(normalized, out var file))
         {
             if (file.IsDirectory)
+            {
                 return false;
+            }
 
             _files[normalized] = file with
             {
@@ -92,7 +101,9 @@ public sealed class VirtualFileSystem
     private static string Normalize(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
+        {
             return "/";
+        }
 
         var normalized = path.StartsWith('/') ? path : "/" + path;
         normalized = normalized.TrimEnd('/');
@@ -109,11 +120,17 @@ public sealed class VirtualFileSystem
         foreach (var part in combined.Split('/'))
         {
             if (string.IsNullOrEmpty(part) || part == ".")
+            {
                 continue;
+            }
+
             if (part == "..")
             {
                 if (parts.Count > 0)
+                {
                     parts.Pop();
+                }
+
                 continue;
             }
 

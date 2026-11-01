@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using TelemoqNet.Api.Emulation;
+
 namespace TelemoqNet.Api.Logging;
 
 public sealed class HoneypotSession
@@ -47,4 +50,6 @@ public sealed record SessionEvent(
     long Sequence,
     string Type,
     DateTimeOffset Timestamp,
-    string? Detail = null);
+    string? Detail = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    PayloadDownloadAttempt? DownloadAttempt = null);

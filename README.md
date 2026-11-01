@@ -29,6 +29,47 @@ See `agents.md` for the code layout and change guidelines.
 For the complete Azure and GitHub OIDC setup, see
 [docs/azure-github-deployment.md](docs/azure-github-deployment.md).
 
+## Payload retrieval attempts and device identity
+
+Telnet and MQTT represent the fictional HG-200 smart-home gateway, firmware
+1.4.2, with hostname `hg-200` by default. The Telnet banner, virtual device files,
+`hostname`, `uname`, and MQTT `home/gateway/{model,firmware,hostname}` metadata
+use that identity. `Honeypot:Hostname` overrides the hostname across both protocols.
+Simulated `netstat` shows the device's public Telnet port 23 (the deployment maps
+it to application port 2323) and the configured MQTT port when MQTT is enabled.
+
+`wget`, `curl`, and `busybox wget` return a plausible network-unreachable error.
+Recognized absolute HTTP(S), FTP, and TFTP URL operands produce ordered
+`payload.download_attempt` session events, for example:
+
+```json
+{
+  "Sequence": 6,
+  "Type": "payload.download_attempt",
+  "Timestamp": "2026-11-01T22:45:12Z",
+  "Detail": null,
+  "DownloadAttempt": {
+    "Tool": "wget",
+    "Url": "http://example.invalid/bot.sh",
+    "Executed": false,
+    "Downloaded": false
+  }
+}
+```
+
+The original command and response remain captured. The additional event data
+is stored in the existing JSON/CSV `Events` field; schema version remains 2.
+Inspection recognizes quoted URLs, absolute tool paths, common option operands,
+and command boundaries such as `;`, `&&`, and pipes. It is passive: it does not
+execute chains, expand variables, inspect script bodies, decode obfuscation, or
+read URL lists from files. Scheme-less destinations are not classified as URLs.
+Unrecognized attempts remain available in raw command capture.
+
+**Thesis limitation:** this records attempted payload retrieval, not actual
+payload acquisition. No payload binary is downloaded, stored, or executed. If
+the approved thesis scope requires binary samples, this implementation does
+not meet that requirement; the reduced scope needs explicit supervisor approval.
+
 ## Run locally
 
 ```bash
@@ -43,6 +84,17 @@ Connect with `telnet localhost 2323` (or `nc localhost 2323`). The default fake 
 ```bash
 dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj
 ```
+
+StyleCop runs during builds for both projects. Control-flow statements require
+braces on separate lines, multiline blocks, and a blank line after a closing
+block before the next statement (SA1500–SA1503 and SA1513). Related clauses such
+as `else`, `catch`, and `finally` stay together. Formatting violations fail the
+build. The two `*OptionsValidator.cs` files are exempt and retain compact checks.
+Auto-properties may stay on one line, including `{ get; }`, `{ get; set; }`, and
+`{ get; init; }`.
+The rules live in `.editorconfig`; the analyzer dependency is shared through
+`Directory.Build.props`. See the [StyleCop rule reference](https://dotnetanalyzers.github.io/StyleCopAnalyzers/SA1513.html)
+for closing-brace spacing.
 
 ## MQTT behavior
 
@@ -209,6 +261,10 @@ When analysis is enabled, retained-table and checkpoint destruction guards must
 be removed explicitly for a deliberate full teardown.
 
 ## Analyze captured sessions
+
+The [query guide](docs/querying-sessions.md) explains the Workbook's time,
+protocol, session ID, IP, country/city and authentication filters, with KQL and
+CLI examples for investigating sessions yourself.
 
 Use the [analysis operating guide](docs/session-analysis.md) to set up private
 Blob ingestion into Log Analytics and the Azure Portal Workbook. Run this when

@@ -16,7 +16,11 @@ internal ref struct MqttBodyReader(ReadOnlySpan<byte> data)
     public bool TryReadByte(out byte value)
     {
         value = 0;
-        if (_offset >= _data.Length) return false;
+        if (_offset >= _data.Length)
+        {
+            return false;
+        }
+
         value = _data[_offset++];
         return true;
     }
@@ -24,7 +28,11 @@ internal ref struct MqttBodyReader(ReadOnlySpan<byte> data)
     public bool TryReadUInt16(out ushort value)
     {
         value = 0;
-        if (_data.Length - _offset < 2) return false;
+        if (_data.Length - _offset < 2)
+        {
+            return false;
+        }
+
         value = BinaryPrimitives.ReadUInt16BigEndian(_data[_offset..]);
         _offset += 2;
         return true;
@@ -33,7 +41,11 @@ internal ref struct MqttBodyReader(ReadOnlySpan<byte> data)
     public bool TryReadBinary(out byte[] value)
     {
         value = [];
-        if (!TryReadUInt16(out var length) || length > _data.Length - _offset) return false;
+        if (!TryReadUInt16(out var length) || length > _data.Length - _offset)
+        {
+            return false;
+        }
+
         value = _data.Slice(_offset, length).ToArray();
         _offset += length;
         return true;
@@ -42,7 +54,11 @@ internal ref struct MqttBodyReader(ReadOnlySpan<byte> data)
     public bool TryReadString(out string value)
     {
         value = string.Empty;
-        if (!TryReadBinary(out var bytes)) return false;
+        if (!TryReadBinary(out var bytes))
+        {
+            return false;
+        }
+
         try
         {
             value = StrictUtf8.GetString(bytes);

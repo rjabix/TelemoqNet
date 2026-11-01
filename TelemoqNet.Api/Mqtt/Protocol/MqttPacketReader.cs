@@ -7,25 +7,43 @@ public sealed class MqttPacketReader(int maxPacketSize)
 
     public void Append(ReadOnlySpan<byte> input)
     {
-        if (input.Length > 0) _buffer.AddRange(input.ToArray());
+        if (input.Length > 0)
+        {
+            _buffer.AddRange(input.ToArray());
+        }
     }
 
     public MqttReadResult Read()
     {
-        if (_buffer.Count < 2) return new(MqttReadStatus.NeedMoreData);
+        if (_buffer.Count < 2)
+        {
+            return new(MqttReadStatus.NeedMoreData);
+        }
+
         var type = _buffer[0] >> 4;
         var flags = (byte)(_buffer[0] & 0x0f);
         var headerError = ValidateHeader(type, flags);
-        if (headerError is not null) return Error(headerError);
+        if (headerError is not null)
+        {
+            return Error(headerError);
+        }
 
         var length = ReadRemainingLength();
         if (length.Status == MqttReadStatus.ProtocolError)
+        {
             return Error(length.Error!);
+        }
+
         if (length.Status == MqttReadStatus.NeedMoreData)
+        {
             return new(MqttReadStatus.NeedMoreData);
+        }
 
         var total = length.HeaderLength + length.RemainingLength;
-        if (_buffer.Count < total) return new(MqttReadStatus.NeedMoreData);
+        if (_buffer.Count < total)
+        {
+            return new(MqttReadStatus.NeedMoreData);
+        }
 
         var body = _buffer.GetRange(length.HeaderLength, length.RemainingLength).ToArray();
         _buffer.RemoveRange(0, total);
@@ -34,12 +52,17 @@ public sealed class MqttPacketReader(int maxPacketSize)
 
     private string? ValidateHeader(int type, byte flags)
     {
-        if (type is < 1 or > 14) return "invalid_packet_type";
+        if (type is < 1 or > 14)
+        {
+            return "invalid_packet_type";
+        }
+
         if (type == (int)MqttPacketType.Publish)
         {
             var qos = (flags >> 1) & 3;
             return qos == 3 || (qos == 0 && (flags & 8) != 0) ? "invalid_flags" : null;
         }
+
         return flags != FixedFlags[type] ? "invalid_flags" : null;
     }
 
@@ -49,14 +72,22 @@ public sealed class MqttPacketReader(int maxPacketSize)
         var remaining = 0;
         for (var index = 1; index <= 4; index++)
         {
-            if (index >= _buffer.Count) return new(MqttReadStatus.NeedMoreData);
+            if (index >= _buffer.Count)
+            {
+                return new(MqttReadStatus.NeedMoreData);
+            }
 
             var encoded = _buffer[index];
             remaining += (encoded & 127) * multiplier;
             if (remaining > maxPacketSize)
+            {
                 return new(MqttReadStatus.ProtocolError, Error: "packet_too_large");
+            }
+
             if ((encoded & 128) == 0)
+            {
                 return new(MqttReadStatus.Packet, index + 1, remaining);
+            }
 
             multiplier *= 128;
         }

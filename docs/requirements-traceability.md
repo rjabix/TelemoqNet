@@ -16,6 +16,8 @@ requirements and testing chapters.
 | FR-08 | Prevent attacker input from executing commands or making outbound requests. | Strategy-based emulator, `VirtualFileSystem`, simulated `wget`/`curl`, no process/network execution APIs | `ComponentTests.GenericLinuxDevice_ExecutesOnlySimulatedCommands`; code review and egress-isolation deployment requirements |
 | FR-09 | Keep sessions and virtual filesystem state isolated. | Per-connection session state and virtual filesystem instances | `TelnetIntegrationTests.VirtualFilesystemAndWorkingDirectory_AreSessionLocal`; concurrent-session test |
 | FR-10 | Preserve clean cancellation and bounded session lifetime. | Cancellation tokens in servers/sessions; session timeout options | Integration fixture shutdown and timeout-focused test runs |
+| FR-11 | Record attempted payload retrieval with tool, URL, timestamp, and explicit execution/download outcome. | `PayloadDownloadAttemptParser`, `TelnetSession`, optional structured `SessionEvent.DownloadAttempt` | `PayloadDownloadTests`, including wire capture, JSON/CSV persistence, and no loopback download connection |
+| FR-12 | Present one consistent fictional gateway identity across protocols. | `DeviceIdentity`, configurable hostname, virtual files and commands, MQTT gateway metadata | `MqttIntegrationTests.GatewayIdentity_IsConsistentAcrossTelnetAndMqtt`; production defaults and MQTT service configuration tests |
 | NFR-01 | Do not log plaintext passwords. | Structured logging excludes password values | `TelnetIntegrationTests.FailedAuthentication_IsCapturedWithoutLoggingPassword` |
 | NFR-02 | Keep the normal test suite deterministic and independent of cloud services. | In-memory session stores; Azure test opt-in; Azurite Testcontainer | Default `dotnet test` run and opt-in Azure test |
 | NFR-03 | Keep protocol behavior observable for later analysis. | Stable session schema, event sequence numbers, timestamps, protocol labels | Session serialization and persistence assertions |
@@ -28,3 +30,11 @@ full MQTT broker, or firmware emulator. It deliberately does not execute
 commands, retrieve payloads, persist attacker-retained state across restarts,
 or support MQTT 3.1, MQTT 5, QoS 2, persistent MQTT sessions, or advanced authentication. These are
 explicit safety and scope decisions, not unimplemented production features.
+
+FR-11 covers **attempted payload retrieval**, not acquisition of downloaded
+binary samples. Download events always report `Executed=false` and
+`Downloaded=false`. If the approved thesis requires actual samples, that
+requirement remains unmet unless the supervisor explicitly approves this scope
+limitation. Recognition is bounded lexical inspection of common downloader
+invocations; variables, script bodies, obfuscation, and scheme-less destinations
+are not interpreted. Raw command capture remains the evidence for those inputs.

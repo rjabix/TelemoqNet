@@ -54,7 +54,8 @@ public sealed class MqttBrokerRegressionTests
     {
         var hub = new BrokerHub(Options.Create(new MqttOptions
         {
-            GlobalAttackerRetainedEnabled = true, MaxRetainedMessages = 2
+            GlobalAttackerRetainedEnabled = true,
+            MaxRetainedMessages = 2
         }));
         var client = new RecordingClient();
         hub.Register(client);
@@ -123,7 +124,10 @@ public sealed class MqttBrokerRegressionTests
             Messages.Add((qos, retain));
             return true;
         }
-        public void Disconnect(string reason) { }
+
+        public void Disconnect(string reason)
+        {
+        }
     }
 
     private sealed class StalledWriterStream : Stream
@@ -137,22 +141,32 @@ public sealed class MqttBrokerRegressionTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 return 0;
             }
+
             _read = true;
             byte[] connect = [0x10, 15, 0, 4, 77, 81, 84, 84, 4, 2, 0, 0, 0, 3, 97, 98, 99];
             connect.CopyTo(buffer);
             return connect.Length;
         }
+
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
             Writing.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
+
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
         public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override void Flush() { }
+        public override long Position
+        {
+            get => throw new NotSupportedException(); set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
         public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();

@@ -150,6 +150,13 @@ Event names include `connection.opened`, `connection.closed`,
 `mqtt.unsubscribe`, `mqtt.pingreq`, and `mqtt.disconnect`. Event details are
 compact strings containing sanitized identifiers and bounded metadata.
 
+Telnet also records `payload.download_attempt`. Passive lexical inspection in
+the emulator recognizes downloader URL operands without executing shell syntax.
+The optional `SessionEvent.DownloadAttempt` object contains `Tool`, `Url`,
+`Executed=false`, and `Downloaded=false`. Existing event fields, schema version 2,
+and CSV columns remain unchanged. Raw commands and responses are still captured.
+This evidence describes attempted retrieval only; it contains no downloaded binary.
+
 The local CSV store preserves its existing header and neutralizes
 spreadsheet-formula cells. The Azure Blob store uses the configured blob service
 URI with `DefaultAzureCredential` and stores each session as JSON under

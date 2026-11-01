@@ -2,7 +2,8 @@
 // Login passwords are intentionally omitted from this default view.
 HoneypotRows()
 | where EntityKind in ('Commands', 'Events', 'Logins')
-| project StartedAt, SessionId, Protocol, EntityKind, RecordIndex,
+| project StartedAt, SessionId, Protocol, SourceAddress, Country, City,
+          AuthenticationSucceeded, EntityKind, RecordIndex,
           Timestamp=todatetime(Payload.Timestamp), Command=tostring(Payload.Command),
           Response=tostring(Payload.Response), EventType=tostring(Payload.Type),
           Detail=tostring(Payload.Detail), Username=tostring(Payload.Username),

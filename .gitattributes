@@ -1,0 +1,2 @@
+# Keep text files as LF in the repository and working tree; detect binaries automatically.
+* text=auto eol=lf

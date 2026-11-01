@@ -1,6 +1,4 @@
 HoneypotRows()
 | where EntityKind == 'Sessions'
-// .NET formats endpoints as IPv4:port or [IPv6]:port.
-| extend SourceAddress=trim(@'[\[\]]', replace_regex(tostring(Payload.RemoteEndpoint), @':\d+$', ''))
-| summarize Sessions=count() by SourceAddress, Protocol
+| summarize Sessions=count() by SourceAddress, Country, City, Protocol
 | top 20 by Sessions desc

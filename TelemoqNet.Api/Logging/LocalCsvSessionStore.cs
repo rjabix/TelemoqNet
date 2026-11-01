@@ -92,7 +92,10 @@ public sealed class LocalCsvSessionStore : ISessionStore
     {
         var text = value ?? string.Empty;
         if (text.Length > 0 && text[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+        {
             text = "'" + text;
+        }
+
         return $"\"{text.Replace("\"", "\"\"")}\"";
     }
 }

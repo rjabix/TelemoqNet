@@ -5,6 +5,7 @@ WORKDIR /app
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
+COPY ["Directory.Build.props", ".editorconfig", "./"]
 COPY ["TelemoqNet.Api/TelemoqNet.Api.csproj", "TelemoqNet.Api/"]
 RUN dotnet restore "TelemoqNet.Api/TelemoqNet.Api.csproj"
 COPY . .
