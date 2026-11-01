@@ -135,7 +135,8 @@ az login
 az account set --subscription <honeypot-subscription-id>
 cd infra
 cp terraform.tfvars.example terraform.tfvars    # fill in subscription, repo, SSH public key
-terraform init
+cp backend.hcl.example backend.hcl             # existing separately provisioned state backend
+terraform init -backend-config=backend.hcl
 terraform validate
 terraform plan
 terraform apply
@@ -144,6 +145,9 @@ terraform apply
 Keep `allow_bootstrap_egress = true` (the default) for this first apply so the VM can install
 Docker on first boot. Note the outputs: `acr_name`, `acr_login_server`, `public_ip`, `vm_name`,
 `resource_group`, `github_client_id`, `tenant_id`.
+
+Existing local-state deployments must migrate their authoritative state before
+using the explicit AzureRM backend; see [state migration and analysis setup](docs/session-analysis.md#setup-performed-by-the-script-and-manual-alternatives).
 
 ### 2. Wait for first boot, then close the bootstrap egress
 
@@ -201,12 +205,31 @@ subscription ID go in as repository environment variables, not secrets).
 The VM has no general internet access, so OS updates need `allow_bootstrap_egress = true`
 temporarily (or a rebuilt VM). `terraform destroy` removes everything and stops the costs.
 Collected logs are deleted with the storage account, so export what you need first.
+When analysis is enabled, retained-table and checkpoint destruction guards must
+be removed explicitly for a deliberate full teardown.
+
+## Analyze captured sessions
+
+Use the [analysis operating guide](docs/session-analysis.md) to set up private
+Blob ingestion into Log Analytics and the Azure Portal Workbook. Run this when
+you want new data imported. It handles image publication, backend setup/state
+migration and the guarded analysis deployment automatically:
+
+```bash
+python3 infra/scripts/analysis-once.py
+```
+
+It creates temporary runtime, dry-runs, imports new source versions, verifies
+delivery, and removes runtime. An optional retained-runtime schedule is also
+available. Keeping the managed network available costs
+roughly $18–22/month at ordinary retail rates before compute and ingestion;
+the guide records checked prices and assumptions.
 
 ## Known gaps
 
-- A private-network access method for human log analysis (for example VPN or a controlled jump host)
+- A private-network access method for direct human Blob access (for example VPN or a controlled jump host)
   is not provisioned by this module. The VM's write-only identity can persist sessions but cannot
-  list or read them.
+  list or read them. Imported records can be queried through the Portal Workbook.
 
 ## Safety and data
 

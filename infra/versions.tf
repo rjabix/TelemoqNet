@@ -18,7 +18,7 @@ terraform {
 
   # Remote state: copy backend.hcl.example to backend.hcl, then
   #   terraform init -backend-config=backend.hcl
-  # backend "azurerm" {}
+  backend "azurerm" {}
 }
 
 provider "azurerm" {

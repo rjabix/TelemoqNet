@@ -1,14 +1,16 @@
-let observed = union HoneypotSessions_CL, HoneypotLogins_CL, HoneypotCommands_CL,
-                     HoneypotEvents_CL, HoneypotPayloadChunks_CL
-    | summarize by SourceBlob, SourceETag, ImportRunId, EntityKind, RecordIndex, ChunkIndex
-    | summarize ActualRows=count() by SourceBlob, SourceETag, ImportRunId;
-HoneypotImportStatus_CL
-| summarize arg_max(TimeGenerated, *) by SourceBlob, SourceETag, ImportRunId
-| join kind=leftouter observed on SourceBlob, SourceETag, ImportRunId
-| extend ActualRows=coalesce(ActualRows, tolong(0))
-| extend Delivery=iff(ActualRows == ExpectedRows, 'Complete', 'Partial or awaiting delivery')
-| project TimeGenerated, ImportRunId, SessionId, SourceBlob, ExpectedRows, ActualRows, Delivery
+// Include orphan data even when no final marker was submitted.
+union HoneypotSessions_CL, HoneypotLogins_CL, HoneypotCommands_CL,
+      HoneypotEvents_CL, HoneypotPayloadChunks_CL, HoneypotImportStatus_CL
+| summarize arg_max(TimeGenerated, ExpectedRows, SessionId) by SourceBlob, SourceETag, ImportRunId, EntityKind, RecordIndex, ChunkIndex
+| summarize ActualRows=countif(EntityKind != 'ImportStatus'),
+            ExpectedRows=maxif(ExpectedRows, EntityKind == 'ImportStatus'),
+            Markers=countif(EntityKind == 'ImportStatus'),
+            TimeGenerated=max(TimeGenerated), SessionId=take_any(SessionId)
+    by SourceBlob, SourceETag, ImportRunId
+| extend Delivery=case(
+    Markers > 0 and ActualRows == ExpectedRows, 'Complete',
+    TimeGenerated >= ago(15m), 'Awaiting delivery',
+    Markers == 0, 'Orphan: missing status marker', 'Stale partial delivery')
+| project TimeGenerated, ImportRunId, SessionId, SourceBlob, SourceETag, ExpectedRows, ActualRows, Delivery
 | order by TimeGenerated desc
 | take 500
-// If submission failed before the status marker, inspect the job's execution
-// log and replay that bounded date range; orphan rows stay excluded from charts.

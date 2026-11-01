@@ -1,6 +1,6 @@
 # Honeypot infrastructure (Terraform, Azure)
 
-Status: drafted. `terraform fmt` and `terraform validate` pass locally; run `terraform plan`
+Status: `terraform fmt`, `terraform validate` and mocked `terraform test` are local checks; run `terraform plan`
 against the target subscription before applying.
 
 ## What it creates
@@ -38,16 +38,26 @@ and VM name.
 See [the analysis operating guide](../docs/session-analysis.md) for the optional,
 Terraform-managed Container Apps Job, private blob ingestion, saved KQL, and
 Workbook. It uses a separate identity and never runs on the honeypot VM.
-The feature and its runtime are disabled by default; Terraform apply does not
-start imports. Keep `analysis_enabled = true` for tables/graphs and enable
-`analysis_runtime_enabled` only while importing. A VNet environment creates an
-hourly-billed Standard load balancer even while jobs are idle; disabling the
-runtime removes it. Storage reads and Log Analytics ingestion/retention can
-also incur charges outside available allowances.
+The feature, runtime, and automatic ingestion are disabled by default. Use
+`python3 infra/scripts/analysis-once.py` from the repository root to handle
+backend setup/migration and importer publication automatically, then
+create runtime, validate/import new versions, verify delivery, and remove runtime.
+The Portal Run now button is available while a job exists. A retained-runtime
+15-minute schedule is available separately and disabled by default.
+
+Managed networking costs roughly $18–22/month at normal retail rates before
+execution/ingestion; it does not become free when the job stops. See the operating
+guide for checked rates, optional alerts/budgets, and exact tradeoffs.
+
+The AzureRM backend is explicit. The entry script migrates the existing
+**authoritative state** automatically after validating its live deployment anchors.
+For direct Terraform usage, migrate once using `terraform init -migrate-state -backend-config=backend.hcl`;
+new clones must initialize the same remote backend. Retained tables/checkpoints
+have destruction guards. The signed provider lockfile is committed.
 
 ## Other known gaps
 
 - The Terraform apply identity (separate from the deploy identity) is bootstrapped outside this config.
 - Set `log_reader_principal_id` to an Entra user or group object ID to grant read-only access to
   the sessions container. The reader still needs network access to the VNet/private endpoint.
-- Budgets and Azure Policy are not included yet.
+- Optional dedicated-subscription budgets are included for analysis operators; Azure Policy is not configured.

@@ -1,0 +1,26 @@
+name: Check analysis infrastructure
+on:
+  pull_request:
+    paths: ['infra/**', 'tools/session-importer/**', '.github/workflows/analysis-*.yml']
+  push:
+    branches: [main]
+    paths: ['infra/**', 'tools/session-importer/**', '.github/workflows/analysis-*.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.17.1'
+      - run: python -m unittest discover -s tools/session-importer -p 'test_*.py' -v
+      - run: bash -n infra/scripts/start-analysis.sh
+      - run: terraform -chdir=infra fmt -check -recursive
+      - run: terraform -chdir=infra init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra validate
+      - run: terraform -chdir=infra test

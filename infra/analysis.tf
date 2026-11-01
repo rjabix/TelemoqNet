@@ -20,19 +20,26 @@ locals {
     { name = "State", type = "string" },
   ]
   analysis_environment = local.analysis_runtime_enabled ? {
-    AZURE_CLIENT_ID     = azurerm_user_assigned_identity.analysis[0].client_id
-    BLOB_ENDPOINT       = trimsuffix(azurerm_storage_account.logs.primary_blob_endpoint, "/")
-    BLOB_CONTAINER      = var.container_name
-    INGESTION_ENDPOINT  = azapi_resource.analysis_dcr[0].output.properties.endpoints.logsIngestion
-    DCR_IMMUTABLE_ID    = azapi_resource.analysis_dcr[0].output.properties.immutableId
-    START_DATE          = ""
-    END_DATE            = ""
-    DRY_RUN             = "true"
-    MAX_BLOBS           = "1000"
-    MAX_SOURCE_BYTES    = "10485760"
-    MAX_BLOB_BYTES      = "2097152"
-    MAX_INGESTION_BYTES = "20971520"
-    MAX_SECONDS         = "240"
+    AZURE_CLIENT_ID       = azurerm_user_assigned_identity.analysis[0].client_id
+    BLOB_ENDPOINT         = trimsuffix(azurerm_storage_account.logs.primary_blob_endpoint, "/")
+    BLOB_CONTAINER        = var.container_name
+    INGESTION_ENDPOINT    = azapi_resource.analysis_dcr[0].output.properties.endpoints.logsIngestion
+    DCR_IMMUTABLE_ID      = azapi_resource.analysis_dcr[0].output.properties.immutableId
+    CHECKPOINT_CONTAINER  = azurerm_storage_container.analysis_checkpoints[0].name
+    WORKSPACE_CUSTOMER_ID = azurerm_log_analytics_workspace.main.workspace_id
+    AUTO_INGEST           = tostring(var.analysis_auto_ingest_enabled)
+    LOOKBACK_DAYS         = tostring(var.analysis_lookback_days)
+    FORCE_REIMPORT        = "false"
+    OPERATION_ID          = ""
+    VERIFY_OPERATION      = ""
+    START_DATE            = ""
+    END_DATE              = ""
+    DRY_RUN               = tostring(!var.analysis_auto_ingest_enabled)
+    MAX_BLOBS             = "1000"
+    MAX_SOURCE_BYTES      = "10485760"
+    MAX_BLOB_BYTES        = "2097152"
+    MAX_INGESTION_BYTES   = "20971520"
+    MAX_SECONDS           = "240"
   } : {}
   analysis_queries = {
     sessions       = { title = "Recent sessions", file = "sessions.kql" }
@@ -92,6 +99,9 @@ resource "azapi_resource" "analysis_table" {
   type      = "Microsoft.OperationalInsights/workspaces/tables@2022-10-01"
   name      = "Honeypot${each.key}_CL"
   parent_id = azurerm_log_analytics_workspace.main.id
+  lifecycle {
+    prevent_destroy = true
+  }
   body = {
     properties = {
       plan                 = "Analytics"
@@ -154,7 +164,8 @@ resource "azurerm_container_app_environment" "analysis" {
     name                  = "Consumption"
     workload_profile_type = "Consumption"
   }
-  tags = local.tags
+  tags       = local.tags
+  depends_on = [azurerm_subnet_network_security_group_association.analysis]
 }
 
 resource "azurerm_container_app_job" "analysis" {
@@ -166,9 +177,20 @@ resource "azurerm_container_app_job" "analysis" {
   workload_profile_name        = "Consumption"
   replica_timeout_in_seconds   = 600
   replica_retry_limit          = 0
-  manual_trigger_config {
-    parallelism              = 1
-    replica_completion_count = 1
+  dynamic "manual_trigger_config" {
+    for_each = var.analysis_auto_ingest_enabled ? [] : [1]
+    content {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+  dynamic "schedule_trigger_config" {
+    for_each = var.analysis_auto_ingest_enabled ? [1] : []
+    content {
+      cron_expression          = var.analysis_schedule
+      parallelism              = 1
+      replica_completion_count = 1
+    }
   }
   identity {
     type         = "UserAssigned"
@@ -194,7 +216,7 @@ resource "azurerm_container_app_job" "analysis" {
     }
   }
   tags       = local.tags
-  depends_on = [azurerm_role_assignment.analysis_pull, azurerm_role_assignment.analysis_reader, azurerm_role_assignment.analysis_ingestion]
+  depends_on = [azurerm_role_assignment.analysis_pull, azurerm_role_assignment.analysis_reader, azurerm_role_assignment.analysis_ingestion, azurerm_role_assignment.analysis_checkpoints, azurerm_role_assignment.analysis_query, azurerm_subnet_network_security_group_association.analysis]
 }
 
 resource "azurerm_log_analytics_saved_search" "analysis_rows" {
@@ -204,6 +226,7 @@ resource "azurerm_log_analytics_saved_search" "analysis_rows" {
   category                   = "Honeypot sessions"
   display_name               = "Complete deduplicated session records"
   function_alias             = "HoneypotRows"
+  function_parameters        = ["SessionStart:datetime=datetime(2000-01-01)", "SessionEnd:datetime=datetime(2100-01-01)", "SelectedProtocol:string='all'", "SelectedSession:string=''"]
   query                      = file("${path.module}/analysis/queries/rows.kql")
   depends_on                 = [azapi_resource.analysis_table]
 }
@@ -228,7 +251,7 @@ resource "azurerm_application_insights_workbook" "analysis" {
   data_json = jsonencode({
     version = "Notebook/1.0"
     items = concat([
-      { type = 1, content = { json = "# Captured honeypot sessions\nRun the manual importer before querying new blobs. Only complete imports appear in session charts. Large record previews are marked; use the reconstruction query for full text. Workspace time is import time; Start/End below filter original session time." } },
+      { type = 1, content = { json = "# Captured honeypot sessions\nNew captured data appears after a verified import. Only complete imports appear in session charts. Large record previews are marked; use the reconstruction query for full text. Workspace time is import time; Start/End below filter original session time." } },
       { type = 9, content = {
         version = "KqlParameterItem/1.0"
         parameters = [
@@ -244,7 +267,7 @@ resource "azurerm_application_insights_workbook" "analysis" {
         content = {
           version                 = "KqlItem/1.0"
           title                   = local.analysis_queries[key].title
-          query                   = key == "imports" ? file("${path.module}/analysis/queries/imports.kql") : replace(file("${path.module}/analysis/queries/${local.analysis_queries[key].file}"), "/(?m)^HoneypotRows\\(\\)$/", "HoneypotRows()\n| where StartedAt >= todatetime('{Start:escape}') and StartedAt < todatetime('{End:escape}')\n| where '{Protocol:escape}' == 'all' or Protocol == '{Protocol:escape}'\n| where isempty('{SessionId:escape}') or SessionId == '{SessionId:escape}'")
+          query                   = key == "imports" ? file("${path.module}/analysis/queries/imports.kql") : replace(file("${path.module}/analysis/queries/${local.analysis_queries[key].file}"), "HoneypotRows()", "HoneypotRows(todatetime('{Start:escape}'), todatetime('{End:escape}'), '{Protocol:escape}', '{SessionId:escape}')")
           queryType               = 0
           resourceType            = "microsoft.operationalinsights/workspaces"
           crossComponentResources = [azurerm_log_analytics_workspace.main.id]

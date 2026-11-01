@@ -42,11 +42,15 @@ output "log_analytics_workspace_name" {
 output "analysis" {
   description = "Non-secret identifiers for the optional manual session analysis service."
   value = var.analysis_enabled ? {
-    job_name            = try(azurerm_container_app_job.analysis[0].name, null)
-    workspace_id        = azurerm_log_analytics_workspace.main.id
-    workbook_id         = azurerm_application_insights_workbook.analysis[0].id
-    workbook_portal_url = "https://portal.azure.com/#resource${azurerm_application_insights_workbook.analysis[0].id}"
-    image_repository    = "${azurerm_container_registry.main.login_server}/telemoqnet-session-importer"
-    job_portal_url      = try("https://portal.azure.com/#resource${azurerm_container_app_job.analysis[0].id}/overview", null)
+    job_name               = try(azurerm_container_app_job.analysis[0].name, null)
+    managed_resource_group = try(azurerm_container_app_environment.analysis[0].infrastructure_resource_group_name, null)
+    workspace_customer_id  = azurerm_log_analytics_workspace.main.workspace_id
+    runtime_enabled        = local.analysis_runtime_enabled
+    auto_ingest_enabled    = var.analysis_auto_ingest_enabled
+    workspace_id           = azurerm_log_analytics_workspace.main.id
+    workbook_id            = azurerm_application_insights_workbook.analysis[0].id
+    workbook_portal_url    = "https://portal.azure.com/#resource${azurerm_application_insights_workbook.analysis[0].id}"
+    image_repository       = "${azurerm_container_registry.main.login_server}/telemoqnet-session-importer"
+    job_portal_url         = try("https://portal.azure.com/#resource${azurerm_container_app_job.analysis[0].id}/overview", null)
   } : null
 }

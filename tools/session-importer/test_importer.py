@@ -34,11 +34,15 @@ class FakeAzure:
         self.reads = 0
 
     def remaining(self):
-        return 10
+        return 1000
 
     def blobs(self, _):
         for index, data in enumerate(self.sessions):
+            if index < getattr(self, "scan_cursor", {}).get("index", 0):
+                continue
+            self.next_cursor = {"index": index}
             yield "2026/10/31/" + str(index) + ".json", len(data), '"etag"'
+            self.next_cursor = {"index": index + 1}
 
     def read_blob(self, name, etag, limit):
         self.reads += 1
@@ -46,6 +50,28 @@ class FakeAzure:
 
     def send(self, table, data):
         self.sent.append((table, json.loads(data)))
+
+    def delivered(self, run_id, expected):
+        keys = {(row['EntityKind'], row['RecordIndex'], row['ChunkIndex'])
+                for _, rows in self.sent for row in rows if row['ImportRunId'] == run_id}
+        return len(keys) == expected + 1
+
+
+class MemoryCheckpoints:
+    cursor_key = "cursor"
+    def __init__(self):
+        self.values = {}
+        self.locked = False
+    def acquire(self):
+        if self.locked:
+            raise app.ImportFailure("another import holds the execution lease")
+        self.locked = True
+    def release(self):
+        self.locked = False
+    def get(self, key):
+        return self.values.get(key)
+    def put(self, key, value):
+        self.values[key] = value.copy()
 
 
 class NormalizationTests(unittest.TestCase):
@@ -159,14 +185,86 @@ class ExecutionTests(unittest.TestCase):
 
     def test_limits_fail_before_unbounded_read_or_ingestion(self):
         azure = FakeAzure([sample(), sample()])
-        with self.assertRaises(app.ImportFailure):
-            self.run_quietly(config(max_blobs=1), azure)
+        self.assertEqual(self.run_quietly(config(max_blobs=1), azure), 0)
         self.assertEqual(azure.reads, 1)
-        for limits in (dict(max_source=1), dict(max_blob=1), dict(max_ingestion=1)):
+        for limits in (dict(max_source=1), dict(max_blob=1)):
             azure = FakeAzure([sample()])
-            with self.assertRaises(app.ImportFailure):
-                self.run_quietly(config(**limits), azure)
+            self.assertEqual(self.run_quietly(config(**limits), azure), 2)
             self.assertEqual(azure.sent, [])
+        with self.assertRaises(app.ImportFailure):
+            self.run_quietly(config(max_ingestion=1), FakeAzure([sample()]))
+
+    def test_resume_moves_past_first_batch_and_delivered_receipts_prevent_reimport(self):
+        azure, state = FakeAzure([sample(), sample(), sample()]), MemoryCheckpoints()
+        with contextlib.redirect_stdout(io.StringIO()):
+            for _ in range(5):
+                app.run(config(max_blobs=1), azure, checkpoints=state)
+        self.assertEqual(azure.reads, 3)
+        self.assertEqual(sum(table == 'ImportStatus' for table, _ in azure.sent), 3)
+        self.assertFalse(state.locked)
+
+    def test_time_budget_stops_at_source_boundary_and_can_continue(self):
+        azure, state = FakeAzure([sample(), sample()]), MemoryCheckpoints()
+        with patch.object(azure, 'remaining', side_effect=[1000, 20]), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(app.run(config(max_seconds=240), azure, run_id='first', checkpoints=state), 0)
+        self.assertTrue(state.values['operations/first.json']['continuation'])
+        self.assertEqual(state.values['cursor'], {'index': 1})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(app.run(config(), azure, checkpoints=state), 0)
+        self.assertEqual(sum(table == 'ImportStatus' for table, _ in azure.sent), 2)
+
+    def test_oversized_source_does_not_block_valid_later_source(self):
+        azure, state = FakeAzure([dict(sample(), Extra='x' * 2000), sample()]), MemoryCheckpoints()
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = app.run(config(max_blob=1000), azure, checkpoints=state)
+        self.assertEqual(result, 2)
+        self.assertEqual(azure.reads, 1)
+        self.assertEqual(sum(table == 'ImportStatus' for table, _ in azure.sent), 1)
+
+    def test_interrupted_delivery_reuses_source_run_and_always_emits_summary(self):
+        azure, state = FakeAzure([sample()]), MemoryCheckpoints()
+        send = azure.send
+        def interrupted(table, body):
+            if table == 'Commands':
+                raise app.ImportFailure('synthetic failure')
+            send(table, body)
+        azure.send = interrupted
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(app.ImportFailure):
+            app.run(config(), azure, checkpoints=state)
+        first_run = azure.sent[0][1][0]['ImportRunId']
+        self.assertIn('"terminalStatus": "Failed"', output.getvalue())
+        self.assertIn('"event": "summary"', output.getvalue())
+        self.assertFalse(state.locked)
+        azure.send = send
+        with contextlib.redirect_stdout(io.StringIO()):
+            app.run(config(), azure, checkpoints=state)
+        self.assertEqual({row['ImportRunId'] for _, rows in azure.sent for row in rows}, {first_run})
+
+    def test_dry_run_does_not_advance_scan_or_write_receipts(self):
+        azure, state = FakeAzure([sample(), sample()]), MemoryCheckpoints()
+        with contextlib.redirect_stdout(io.StringIO()):
+            app.run(config(dry_run=True, max_blobs=1), azure, checkpoints=state)
+        self.assertEqual(state.values, {})
+        self.assertFalse(state.locked)
+
+    def test_expired_pending_receipt_is_replaced_without_verifying_expired_rows(self):
+        azure, state = FakeAzure([sample()]), MemoryCheckpoints()
+        old_run = '00000000-0000-0000-0000-000000000009'
+        key = app.Checkpoints.receipt_key('2026/10/31/0.json', '"etag"')
+        state.values[key] = dict(state='Pending', runId=old_run, expected=4,
+            stamp=(dt.datetime.now(app.UTC) - dt.timedelta(days=26)).isoformat())
+        with contextlib.redirect_stdout(io.StringIO()):
+            app.run(config(), azure, run_id='operation', checkpoints=state)
+        self.assertNotEqual(state.values[key]['runId'], old_run)
+        self.assertNotIn(old_run, {row['runId'] for row in state.values['operations/operation.json']['runs']})
+
+    def test_automatic_mode_derives_rolling_dates_but_manual_requires_dates(self):
+        cfg = app.Config.load({'AUTO_INGEST': 'true', 'LOOKBACK_DAYS': '7'})
+        self.assertEqual((cfg.end - cfg.start).days, 6)
+        self.assertEqual(cfg.end, dt.datetime.now(app.UTC).date())
+        with self.assertRaises(ValueError):
+            app.Config.load({'AUTO_INGEST': 'false'})
 
     def test_replays_have_stable_source_indices(self):
         first = app.normalize(sample(), "blob", "etag", "run1", "t1")

@@ -10,3 +10,10 @@ admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
 # analysis_enabled = true
 # analysis_runtime_enabled = true # Set false after importing to remove runtime/network charges.
 # analysis_image_digest = "sha256:<64 lowercase hex characters>"
+# Optional retained-runtime schedule. Has ~$18-22/month baseline networking cost.
+# analysis_auto_ingest_enabled = true
+# analysis_schedule = "*/15 * * * *"
+# analysis_lookback_days = 7
+# Optional paid Log Analytics alert rules and whole-dedicated-subscription budget:
+# analysis_alert_emails = ["operator@example.com"]
+# analysis_monthly_budget_amount = 30 # Actually uses your subscription's billing currency.

@@ -65,7 +65,7 @@ def main():
     queries = root / "infra/analysis/queries"
     # Use a distinct name so this validator also works after the real saved
     # HoneypotRows function has been deployed in the workspace.
-    preamble += "let TelemoqValidationRows = () {\n" + (queries / "rows.kql").read_text() + "\n};\n"
+    preamble += "let TelemoqValidationRows = (SessionStart:datetime=datetime(2000-01-01), SessionEnd:datetime=datetime(2100-01-01), SelectedProtocol:string='all', SelectedSession:string='') {\n" + (queries / "rows.kql").read_text() + "\n};\n"
     checks = [("completeness", "HoneypotRows() | where EntityKind == 'Sessions' | summarize Sessions=count()")]
     checks += [(path.stem, path.read_text()) for path in sorted(queries.glob("*.kql")) if path.stem != "rows"]
     if len(sys.argv) > 2:
@@ -80,7 +80,7 @@ def main():
             checks.append(('workbook: ' + item['content']['title'], query))
     for name, query in checks:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as body:
-            json.dump({"query": preamble + query.replace('HoneypotRows()', 'TelemoqValidationRows()')}, body)
+            json.dump({"query": preamble + query.replace('HoneypotRows(', 'TelemoqValidationRows(')}, body)
             body.flush()
             result = subprocess.run([
                 "az", "rest", "--method", "post", "--url",

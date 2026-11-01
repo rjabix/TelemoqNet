@@ -1,139 +1,255 @@
 # Query captured sessions in Azure Portal
 
-This optional service reads existing private JSON session blobs into custom Log
-Analytics tables. A manual Azure Container Apps Job runs in its own subnet with
-its own identity. The honeypot VM, container, identity, and storage write-only
-role remain unchanged. Storage public access remains disabled.
+Terraform manages retained analysis tables, a DCR, saved KQL and a Workbook.
+An independent bounded Python importer reads private session blobs, using a
+separate managed identity and subnet. Source access stays read-only, and no
+attacker payload is executed. Mutable import state is stored only in the separate
+private `analysis-checkpoints` container. Its identity can query the workspace
+to verify delivery and write checkpoints, but cannot write captured evidence.
 
-Terraform creates infrastructure and query definitions. The image workflow
-builds the independent importer. Neither applying Terraform nor publishing an
-image starts an import. Normal investigation is entirely in Azure Portal.
+## Recommended: run a script when you want new data
 
-## Deployment and runtime removal
-
-`analysis_enabled = true` keeps the query tables, ingestion rule, saved queries,
-and Workbook. `analysis_runtime_enabled = true` additionally creates the
-container environment, manual job, subnet, and dedicated identity/roles.
-The runtime switch defaults to false because the VNet environment creates a
-Standard load balancer with hourly charges even when no import is running,
-outside any applicable free allowance. Stopping a job does not remove that
-load balancer. This is not an idle-free networking design.
-
-1. Review `infra/analysis.tf`. The existing VNet must have `10.50.0.128/27`
-   available, and `Microsoft.App` must be registered. Use the existing Terraform
-   state/backend. The Terraform deployment identity needs resource creation and
-   role-assignment rights.
-2. Publish the image before enabling the runtime to avoid paying for network
-   infrastructure while building. Run GitHub Actions **Build session importer**
-   manually on the reviewed branch. It uses the existing `prod` environment,
-   OIDC identity, ACR variables, and Azure ID variables; it reports the digest in
-   the run summary. It does not deploy to the honeypot VM or run an import.
-3. Set `analysis_enabled = true`, `analysis_runtime_enabled = true`, and
-   `analysis_image_digest = "sha256:..."` in untracked `infra/terraform.tfvars`.
-   From `infra/`, run `terraform init`, `terraform plan`, then apply the reviewed
-   plan. Environment creation can take many minutes; the initial live
-   deployment took about 14 minutes.
-4. Open `analysis.job_portal_url`. Verify Manual trigger, no automatic retries,
-   one replica, and a 600-second timeout. Wait for initial role propagation if
-   needed rather than widening permissions. Run the bounded import below.
-5. After the imported records are verified, set only
-   `analysis_runtime_enabled = false`, leaving `analysis_enabled = true` and the
-   image digest recorded. Review/apply the plan: it should remove only the job,
-   environment, analysis subnet, dedicated identity, and its three role
-   assignments. Azure also removes the managed environment resource group and
-   its load balancer. The source blobs, query tables, DCR, saved queries, and
-   Workbook remain. Confirm the managed resource group actually disappears.
-6. For another import, temporarily enable the runtime again and apply, run the
-   import, then disable/apply again. Terraform can run in Azure Portal Cloud
-   Shell using the reviewed repository and existing state/backend. There is no
-   **Run now** button while the job has been removed. Opening graphs or querying
-   already imported records never requires recreating the runtime.
-
-Do not disable `analysis_enabled` just to stop compute: disabling that switch
-removes the analysis tables and their imported data too. Do not create a second
-Terraform state or upload state, credentials, or captured records into Git.
-The current deployment uses local state in the existing workspace; Cloud Shell
-cannot automatically access it. Arrange secure access to that same state before
-applying from Cloud Shell, or redeploy from the existing workspace. A fresh
-clone with an empty state must not be used to recreate existing infrastructure.
-
-## Import a date range (while the runtime is enabled)
-
-1. In Azure Portal, open **Container Apps Jobs → job-telemoq-session-import**
-   (the name uses your configured prefix), then **Run now**.
-2. Override environment variables for this execution: `START_DATE` and
-   `END_DATE` as `YYYY-MM-DD` in UTC, both inclusive, at most 31 days. Start with
-   one day. Keep `DRY_RUN=true` initially. Preserve the other template settings.
-3. Inspect the execution's console logs and terminal status. A dry-run reads
-   and validates sources and estimates generated ingestion bytes; it sends no
-   records to Log Analytics. It still uses compute and blob reads.
-4. If bounds and estimates are suitable, run again with the same dates and
-   `DRY_RUN=false`. Wait for termination. API acceptance is not immediate query
-   visibility; inspect **Import delivery status** in the Workbook after ingestion.
-5. Open **Log Analytics workspace → Logs**, use KQL mode, and select a time
-   range covering the import time. Run `HoneypotRows()` or a saved query under
-   **Honeypot sessions**. Open **Workbooks → Honeypot session analysis** for graphs.
-
-The job has no default dates and exits without reading blobs if none are given.
-Execution overrides are ephemeral; they do not modify Terraform configuration.
-The importer has a second internal deadline in addition to the platform timeout.
-Use **Stop execution** to terminate an unwanted run. Do not launch overlapping
-runs: one replica per execution does not prohibit multiple concurrent executions.
-
-If your portal does not offer the overrides, open Azure Portal Cloud Shell,
-obtain the reviewed repository revision, and use:
+No analysis runtime needs to remain deployed between investigations. With Azure
+CLI, Terraform, Docker and Python installed, sign in with `az login` and keep the
+existing `infra/terraform.tfvars`. From the repository root run:
 
 ```bash
-bash infra/scripts/start-analysis.sh rg-telemoq job-telemoq-session-import 2026-10-31 2026-10-31 true
-# Repeat with false only after reviewing the dry-run.
+python3 infra/scripts/analysis-once.py
 ```
 
-The script retrieves the whole job template through ARM, changes only dates and
-dry-run, and invokes the execution. Optional `ANALYSIS_MAX_BLOBS`,
-`ANALYSIS_MAX_SOURCE_BYTES`, `ANALYSIS_MAX_BLOB_BYTES`,
-`ANALYSIS_MAX_INGESTION_BYTES`, and `ANALYSIS_MAX_SECONDS` environment variables
-override the same bounded job settings. It never reads private blobs from Cloud
-Shell. It checks for active executions, but that check is not a distributed lock.
-Use a storage-free/ephemeral Cloud Shell when available to avoid creating an
-unnecessary persistent share. The CLI may prompt to install its Container Apps
-extension. For repeated operation, bookmark the job and Workbook in the portal.
+The same command performs first-time setup and subsequent imports: it validates
+the selected subscription and live state anchors, securely backs up local state
+and settings, recovers an empty local state from its intact validated backup if
+needed, creates a separate Entra-authenticated LRS state account/container,
+enables state versioning/soft delete, assigns the current operator state access,
+and migrates the existing state. It never creates a fresh honeypot deployment
+from an empty state. The backend has no anonymous access or shared-key access;
+its authenticated HTTPS endpoint is reachable by the operator. It is separate
+from the source account, whose public network access stays disabled.
 
-## Limits and cost
+The script builds only the Dockerfile and importer source, pushes a linux/amd64
+image to the existing ACR, and pins its digest in the untracked tfvars. It caches
+images by source hash, preserves other settings, and leaves both runtime and
+scheduling disabled in those settings. It refreshes recovered state against ARM
+before applying any guarded analysis-only plan. Setup resources are reused on
+subsequent calls. Bootstrap needs permission to create the state resource group,
+storage and the operator role assignment; ordinary invocation also needs the
+permissions described below. State storage has a small separate usage charge.
+Sensitive local backups remain under ignored `infra/.analysis/backups/`.
 
-Default job execution limits: 1000 blobs, 10 MiB total source, 2 MiB per source blob,
-20 MiB serialized ingestion requests, 20,000 normalized rows per source, and
-240 seconds. Limits can be lowered
-or raised within hard-coded ceilings using execution overrides. A run that
-hits a limit stops; already accepted sessions remain available. A day with more than 1000 files requires increasing `MAX_BLOBS` for that execution. Narrow the
-date range rather than repeatedly importing the same large range.
+If an earlier run was interrupted during teardown, finish cleanup without
+building an image or importing again:
 
-The ingestion upload budget also counts retries; a response lost after Azure
-accepted a batch can otherwise consume the allowance more than once. The
-summary distinguishes generated bytes from attempted upload bytes. Neither
-number is an exact Azure billing measurement.
+```bash
+python3 infra/scripts/analysis-once.py --cleanup-only
+```
 
-This is not a guaranteed-free solution. Consumption execution, platform
-infrastructure/networking, source reads, image storage/building, and Log Analytics
-ingestion/retention can incur charges. Account-wide free allowances may already
-be consumed. Dry-runs do not estimate every Azure charge. No shared workspace
-daily cap is changed. A per-execution limit is not a spending cap, and repeated
-or concurrent runs increase costs. Restrict job start/update rights to trusted
-operators: execution overrides can run code with the job identity.
+Read-only Azure calls retry transient connection failures. Cleanup retries up to
+three times, generating a fresh guarded Terraform plan after a partial apply.
+Job starts are never automatically replayed after an ambiguous network failure.
 
-Only the Consumption workload profile is configured. There is no NAT gateway,
-new environment private endpoint, dedicated workload profile, inbound app, or
-schedule. VNet integration reaches the existing Blob private endpoint; it is
-different from adding a private endpoint to the Container Apps environment.
-The initial live deployment created one Standard internal load balancer with
-two rules. These network charges are independent of Consumption job execution.
-Remove the runtime after imports to eliminate that ongoing load balancer; do
-not delete or modify individual resources in the managed resource group.
+Additional bounded options:
 
-If you choose to retain the runtime, Azure can delete Container Apps environments idle for over 90 days. If that
-happens, use the existing Terraform state to plan/recreate the environment and
-job, then run another bounded import. Do not keep a replica running merely to
-prevent cleanup. Analysis tables retain data for 30 days; source blobs are not
-modified or deleted. Reimport historical blobs as needed.
+```bash
+# Provision runtime, validate sources, and remove runtime without ingesting.
+python3 infra/scripts/analysis-once.py --var-file infra/terraform.tfvars --dry-run-only
+
+# Provision, dry-run, import new versions from the last seven UTC days,
+# verify their delivery, and remove runtime.
+python3 infra/scripts/analysis-once.py --var-file infra/terraform.tfvars
+
+# Historical range, or more bounded batches for a backlog:
+python3 infra/scripts/analysis-once.py --var-file infra/terraform.tfvars \
+  --start 2026-10-01 --end 2026-10-07 --max-executions 3
+```
+
+The operator needs Terraform apply/role-assignment rights and Azure CLI login.
+Use `--skip-setup` only when the backend and image are already prepared. It refuses a new/empty deployment,
+an existing runtime, unrelated infrastructure changes, or deletion of retained data.
+The script serializes the complete create/import/remove cycle using an infinite
+lease on `<backend-state-key>.analysis-operation.lock` in the backend container,
+separate from the Terraform state blob. Terraform also locks individual applies.
+The importer additionally uses one renewable 60-second Blob lease across manual
+and scheduled executions. A killed process releases its lease by expiry.
+
+The script also compiles the saved queries and deployed Workbook panels against
+synthetic datatables before importing, without reading captured payloads.
+It waits for each execution, verifies actual deduplicated row counts
+against a private operation manifest, then stops any remaining execution and
+applies runtime removal in `finally`, including on errors or SIGTERM. When Azure
+reports the managed resource-group name, it waits up to five minutes for that
+group to disappear and fails explicitly if networking remains. Verification
+never treats an empty query result as proof that a submitted import arrived.
+A hard kill or runner timeout can leave the operation lease locked. Confirm no
+operation or execution is running before administratively breaking the lease
+on that separate `.analysis-operation.lock` blob; never break the state blob
+lease for this purpose. A hard kill, runner timeout or Azure deletion failure
+can also leave billable resources: inspect the Terraform state and managed resource group after failures.
+The script refuses to take over an existing active runtime. If Azure reports a
+previous environment as `ScheduledForDelete`, a subsequent invocation first
+resumes its guarded teardown and verifies network removal before creating new
+runtime. An Azure resource-provider deletion fault can still block this step;
+the command reports failure rather than claiming full ingestion or cleanup.
+
+Each execution is bounded. `--max-executions` is 1..10 and defaults to ten as an
+overall ceiling, following one dry-run. The script stops early when a verified
+batch completes the date-range scan. It reads only the importer's verification
+metadata from execution logs to decide whether another batch is needed. If the
+overall ceiling is reached, it removes runtime and exits with saved progress
+and an explicit continuation message. A new invocation resumes that progress. Daily polling cannot catch
+late blobs outside its configured lookback; import their dates explicitly.
+
+## Setup performed by the script (and manual alternatives)
+
+The default command handles these steps automatically. For a manually managed
+backend/image, or to inspect each step separately:
+
+1. Publish the reviewed importer image using **Build session importer**. Record
+   its immutable digest in the existing untracked `terraform.tfvars`.
+2. The root now explicitly uses an AzureRM backend. Provision a separate private,
+   Entra-authenticated state account/container outside this stack, or use your
+   existing authoritative remote backend. Enable state versioning/soft delete
+   and give only trusted operators Blob Data Contributor access to state.
+3. For the existing local deployment, make a secure backup and run:
+   `terraform -chdir=infra init -migrate-state -backend-config=/absolute/path/backend.hcl`.
+   Terraform asks before copying state. Use `infra/backend.hcl.example`; this is
+   an explicit migration, not an apply. Never initialize an empty backend and
+   try to recreate existing resources. For an already remote deployment use
+   `terraform -chdir=infra init -backend-config=/absolute/path/backend.hcl`.
+4. Set `analysis_enabled=true`, `analysis_runtime_enabled=false`, and
+   `analysis_auto_ingest_enabled=false`. Plan the baseline once, inspect it,
+   run the plan guard below, and apply it. The baseline provisions retained
+   checkpoints, query updates and the honeypot/analysis subnet deny rules.
+   Existing analysis tables must be preserved. A scheduled runtime also needs
+   the `Microsoft.App` resource provider registered.
+5. Retain that same reviewed tfvars and backend for every script invocation.
+   The signed provider lockfile is versioned for macOS ARM64 and Linux AMD64.
+   The first baseline deployment may change the existing environment if it is
+   currently active; stop its executions and review the plan before applying.
+
+```bash
+terraform -chdir=infra plan -out=/tmp/analysis-baseline.tfplan
+terraform -chdir=infra show -json /tmp/analysis-baseline.tfplan | \
+  python3 infra/scripts/check-analysis-plan.py
+terraform -chdir=infra apply /tmp/analysis-baseline.tfplan
+```
+
+`prevent_destroy` protects the tables and checkpoint container even if the
+feature toggle is disabled. Deliberate evidence-copy teardown requires removing
+that protection explicitly and reviewing a separate destructive plan. Removing
+resource blocks also removes Terraform's lifecycle protection. The plan guard
+is an additional check, not an Azure authorization boundary.
+
+## Buttons and optional automation
+
+With runtime deployed manually (`analysis_runtime_enabled=true`), Azure Portal
+**Container Apps Jobs → job-<prefix>-session-import → Run now** supports the
+usual `START_DATE`, `END_DATE` and `DRY_RUN` execution overrides. Dates are UTC,
+inclusive, at most 31 days. Defaults are blank dates and dry-run; a normal manual
+job cannot accidentally ingest everything. Keep other environment settings.
+The Portal button cannot create an environment that has been removed. Use the
+script above for creation plus automatic cleanup.
+
+For frequent ingestion with the runtime left available, opt in separately:
+
+```hcl
+analysis_enabled             = true
+analysis_runtime_enabled     = true
+analysis_auto_ingest_enabled = true
+analysis_schedule            = "*/15 * * * *"
+analysis_lookback_days        = 7
+```
+
+This is a scheduled Container Apps Job, not a continuously running replica.
+Dates are derived each execution unless explicitly overridden. It scans the
+rolling lookback, remembers scan progress, and skips delivered source versions.
+Disable the schedule before removing runtime. Use the entry script for on-demand
+imports or retain a scheduled runtime; the script refuses to take over an existing
+runtime.
+
+## Recovery and delivery guarantees
+
+A source-version receipt is keyed by a hash of blob name plus ETag. Conditional
+`If-Match` reads prevent importing a different version than the one listed.
+Pending uploads reuse their original import UUID on retry; queries deduplicate
+physical duplicate rows. A submitted receipt becomes Complete only after an
+actual workspace query confirms all expected rows including its status marker.
+Submissions younger than 15 minutes can settle before being retried.
+
+Completed receipts are reused for 25 days, within the tables' 30-day retention.
+A storage lifecycle rule expires receipts, scan cursors and operation manifests
+after 35 days without modification; it excludes captured evidence and lock blobs.
+Malformed or oversized sources are reported individually, with only a hashed
+source identifier in logs, and rejected versions are held for one day. They do
+not block later valid blobs. To replay despite receipts or after a normalizer
+change, override `FORCE_REIMPORT=true` for a bounded date range. This also resets
+the scan cursor for that execution and incurs ingestion charges again.
+
+The persisted cursor includes the day, Azure listing marker and last name on
+that page. Finishing a sweep resets it, so subsequent sweeps discover late
+arrivals whose names sort before an earlier cursor. Each run permits at most
+200 listing pages. Count/source/ingestion budgets stop at a resumable boundary;
+a single entity too large for the execution's entire ingestion budget requires
+raising that budget within the hard ceiling. Transport and authorization failures
+abort the run and keep pending receipts for recovery. Summaries include run ID,
+counts, skipped sources, failed sources and continuation status, even on failure.
+
+Normal ingestion and raw storage are not exactly-once: ambiguous HTTP retries
+can create physical duplicates and charges. Source JSON is never modified.
+API acceptance does not establish delivery. The on-demand script starts a second
+verification execution against its exact bounded operation manifest before
+removing runtime. Large backlogs may need more than one invocation.
+
+## Cost and alerts
+
+Retail USD checked on 2026-11-01 using Azure's public retail pricing API
+(global regional-LB meter; public-IP rates checked in Austria East and West Europe):
+
+| Additional resource | Retail rate | At 730 hours/month |
+| --- | --- | --- |
+| Standard regional load balancer, first five rules | $0.025/hour | $18.25 |
+| Standard public IPv4, if provisioned/billed | $0.005/hour | $3.65 each |
+| Load balancer processed data | $0.005/GB | Depends on traffic |
+
+The two-rule load balancer documented in the initial deployment falls in the
+first-five-rules rate; two rules do not double that rate. Leaving managed
+networking available is therefore about $18.25/month for that load balancer
+alone, or about $21.90 with one billed public IP, before data, ingestion and
+other services. Check the actual managed resource inventory and Cost Management
+for your deployment. Free offers, taxes, currency and subscription discounts
+can change the bill. This is not a $1/month always-available design.
+
+An ephemeral run pays for its provisioned hours instead of a full month.
+Load balancer and public-IP partial hours round up. Thirty one-hour provisioned
+windows would be about $0.75 for the load balancer, plus about $0.15 for one
+public IP if applicable, but creation/deletion delays can extend those windows.
+Compute, Blob reads/checkpoints, state hosting, image storage/building, logging,
+alerts and Logs Ingestion remain separate; this estimate is not a total-cost
+promise. Existing ACR, private endpoints, DNS and VM costs remain in the base
+stack. Merely stopping job execution does not remove the load balancer.
+
+Defaults per execution: 1000 examined blobs, 10 MiB source, 2 MiB per source,
+20 MiB serialized ingestion attempts (including retries), 20,000 normalized rows
+per source, and 240 seconds in the saved job definition; the on-demand operator overrides
+the internal deadline to 540 seconds, below the platform's 600-second timeout.
+The importer stops admitting new sources with less than 30 seconds remaining,
+commits its cursor/manifest and allows the operator to continue safely in another
+batch. There are no platform retries. Overrides stay within hard-coded ceilings.
+
+Set `analysis_alert_emails` to enable an action group, importer/stale-delivery
+log alerts, failed-environment-deletion activity alerts, and a monthly **dedicated
+subscription** budget. `analysis_monthly_budget_amount` defaults to 30 in your
+subscription's billing currency. It covers VM/ACR and managed networking in its
+separate resource group too. Budget notifications at 80% actual and 100%
+forecast do not stop spending. Log alert rules have their own charges. Empty
+email recipients leave these optional paid alert resources unprovisioned.
+The importer logs no attacker payloads or passwords, but workspace query access
+still permits reading raw captured login data. Grant workspace RBAC accordingly.
+
+Pricing sources: [Load Balancer](https://azure.microsoft.com/en-us/pricing/details/load-balancer/),
+[Public IP](https://azure.microsoft.com/en-us/pricing/details/ip-addresses/),
+[Retail pricing API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices),
+and [Container Apps managed resources](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks#managed-resources).
 
 ## Schema and exact payloads
 
@@ -183,7 +299,7 @@ normal charts. Synthetic validation never writes or changes source blobs.
 
 ## Queries, graphs, and partial delivery
 
-`HoneypotRows()` deduplicates retries by source version, run, entity kind, record
+`HoneypotRows(SessionStart, SessionEnd, SelectedProtocol, SelectedSession)` has optional parameters; `HoneypotRows()` remains compatible. Filters apply before completeness checks and only narrow complete-run keys are materialized. It deduplicates retries by source version, run, entity kind, record
 index, and chunk index. It includes only runs whose observed rows exactly match
 the status marker's expected count, then chooses the latest complete run for
 each source version. Concurrent/repeated imports can create physical duplicates
@@ -191,7 +307,7 @@ and ingestion charges; this is not exactly-once ingestion. Different ETags are
 kept as distinct source versions, so overwrites can appear as separate captures.
 
 If a send fails before the status marker, orphan rows remain excluded from
-graphs. Check job status/logs and replay the requested range. If a marker arrives
+graphs and appear explicitly in Import delivery status after 15 minutes. Replay the requested range; pending receipts reuse the original source import ID. If a marker arrives
 before other streams, the delivery query shows partial data until all rows
 arrive. The API does not provide a cross-table transaction. Stop executions
 before disabling resources; removal of a table deletes its analysis copy.
@@ -210,6 +326,7 @@ python3 -m unittest discover -s tools/session-importer -p 'test_*.py' -v
 bash -n infra/scripts/start-analysis.sh
 terraform -chdir=infra fmt -check
 terraform -chdir=infra validate
+terraform -chdir=infra test
 dotnet build TelemoqNet.slnx
 ```
 

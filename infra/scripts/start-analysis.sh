@@ -37,6 +37,9 @@ if len(template['containers']) != 1:
     raise SystemExit('Expected exactly one importer container')
 env = template['containers'][0]['env']
 updates = {'START_DATE': start, 'END_DATE': end, 'DRY_RUN': dry}
+for name in ('OPERATION_ID', 'VERIFY_OPERATION', 'FORCE_REIMPORT'):
+    if 'ANALYSIS_' + name in os.environ:
+        updates[name] = os.environ['ANALYSIS_' + name]
 for name in ('MAX_BLOBS', 'MAX_SOURCE_BYTES', 'MAX_BLOB_BYTES', 'MAX_INGESTION_BYTES', 'MAX_SECONDS'):
     if 'ANALYSIS_' + name in os.environ:
         updates[name] = os.environ['ANALYSIS_' + name]

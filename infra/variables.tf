@@ -86,3 +86,48 @@ variable "analysis_runtime_enabled" {
   default     = false
   description = "Temporarily provision the importer job, VNet environment, and runtime identity. Disable after import to remove ongoing managed network charges while retaining tables and Workbook. Requires analysis_enabled."
 }
+
+variable "analysis_auto_ingest_enabled" {
+  type        = bool
+  default     = false
+  description = "Opt in to recurring incremental imports. Keeps the managed network billable while enabled."
+  validation {
+    condition     = !var.analysis_auto_ingest_enabled || (var.analysis_enabled && var.analysis_runtime_enabled && var.analysis_image_digest != null)
+    error_message = "Automatic ingestion requires analysis_enabled, analysis_runtime_enabled, and a published analysis_image_digest."
+  }
+}
+
+variable "analysis_schedule" {
+  type        = string
+  default     = "*/15 * * * *"
+  description = "Five-field UTC cron for automatic ingestion; Azure validates cron semantics."
+  validation {
+    condition     = length(split(" ", trimspace(var.analysis_schedule))) == 5 && can(regex("^[0-9*/?, -]+$", var.analysis_schedule))
+    error_message = "analysis_schedule must be a five-field numeric cron expression."
+  }
+}
+
+variable "analysis_lookback_days" {
+  type    = number
+  default = 7
+  validation {
+    condition     = var.analysis_lookback_days >= 1 && var.analysis_lookback_days <= 31 && floor(var.analysis_lookback_days) == var.analysis_lookback_days
+    error_message = "analysis_lookback_days must be an integer from 1 to 31."
+  }
+}
+
+variable "analysis_alert_emails" {
+  type        = set(string)
+  default     = []
+  description = "Optional operator emails for analysis failure, stale-delivery, cleanup-failure and dedicated-subscription budget alerts."
+}
+
+variable "analysis_monthly_budget_amount" {
+  type        = number
+  default     = 30
+  description = "Monthly dedicated-subscription budget in its billing currency. Notifications do not stop spending."
+  validation {
+    condition     = var.analysis_monthly_budget_amount > 0
+    error_message = "Budget must be positive."
+  }
+}

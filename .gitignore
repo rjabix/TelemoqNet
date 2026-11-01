@@ -9,6 +9,8 @@ plans/
 .DS_Store
 TelemoqNet.sln.DotSettings.user
 infra/.terraform/
+infra/.analysis/
+infra/.terraform.lock.hcl
 infra/*.tfstate
 infra/*.tfstate.*
 infra/terraform.tfvars

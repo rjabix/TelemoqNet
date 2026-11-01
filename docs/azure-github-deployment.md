@@ -59,7 +59,9 @@ ID-qualified OIDC subject; if so, set `github_oidc_subject` to the exact prefix
 shown in the Actions login error. The `github_environment` value must remain
 `prod` unless both Terraform and the workflow are changed together.
 
-Initialize, validate, and apply:
+For an existing local-state deployment, the analysis entry script can migrate
+its authoritative state automatically; see [state migration](session-analysis.md#setup-performed-by-the-script-and-manual-alternatives).
+For a new deployment or an already migrated backend, initialize, validate, and apply:
 
 ```bash
 terraform init -backend-config=backend.hcl
