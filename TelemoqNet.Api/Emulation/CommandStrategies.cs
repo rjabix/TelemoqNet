@@ -18,11 +18,16 @@ public sealed class CommandContext(
     public string Hostname { get; } = hostname;
 }
 
+public sealed record DeviceCommandResult(string? Output, int ExitCode = 0, bool EmitsEmptyLine = false)
+{
+    public static implicit operator DeviceCommandResult(string? output) => new(output);
+}
+
 public interface IDeviceCommand
 {
     string Name { get; }
 
-    Task<string?> ExecuteAsync(
+    Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken);
@@ -32,11 +37,11 @@ public sealed class HelpCommand : IDeviceCommand
 {
     public string Name => "help";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(
+        Task.FromResult<DeviceCommandResult>(
             "Built-in commands: " +
             "help echo env pwd ls cat touch mkdir rm uname id whoami hostname " +
             "ifconfig ip ps netstat df free mount dmesg date uptime busybox " +
@@ -47,37 +52,85 @@ public sealed class EchoCommand : IDeviceCommand
 {
     public string Name => "echo";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
-        CancellationToken cancellationToken)
-    {
-        var redirectIndex = Array.IndexOf(arguments, ">>");
-        return redirectIndex >= 0
-            ? Task.FromResult<string?>(ExecuteRedirect(arguments, redirectIndex, context))
-            : Task.FromResult<string?>(string.Join(' ', arguments));
-    }
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new DeviceCommandResult(Response(arguments), EmitsEmptyLine: true));
 
-    private static string ExecuteRedirect(
-        string[] arguments,
-        int redirectIndex,
-        CommandContext context)
+    internal static string Response(string[] arguments)
     {
-        if (redirectIndex == arguments.Length - 1)
+        var escapes = false;
+        var index = 0;
+        while (index < arguments.Length && arguments[index] is "-e" or "-E")
         {
-            return "sh: syntax error: missing file operand";
+            escapes = arguments[index++] == "-e";
         }
 
-        if (redirectIndex != arguments.Length - 2)
+        var text = string.Join(' ', arguments[index..]);
+        if (!escapes)
         {
-            return "sh: syntax error near unexpected token";
+            return text;
         }
 
-        var content = string.Join(' ', arguments[..redirectIndex]) + "\n";
-        var path = context.ResolvePath(arguments[^1]);
-        return context.FileSystem.Append(path, content)
-            ? string.Empty
-            : $"sh: {arguments[^1]}: Is a directory";
+        var output = new System.Text.StringBuilder();
+        for (index = 0; index < text.Length; index++)
+        {
+            var value = text[index];
+            if (value != '\\' || index + 1 == text.Length)
+            {
+                output.Append(value);
+                continue;
+            }
+
+            var escaped = text[++index];
+            if (escaped is 'x' or '0')
+            {
+                var number = 0;
+                var digits = 0;
+                var maxDigits = escaped == 'x' ? 2 : 3;
+                var radix = escaped == 'x' ? 16 : 8;
+                while (digits < maxDigits && index + 1 < text.Length)
+                {
+                    var digit = "0123456789abcdef".IndexOf(char.ToLowerInvariant(text[index + 1]));
+                    if (digit < 0 || digit >= radix)
+                    {
+                        break;
+                    }
+
+                    number = number * radix + digit;
+                    digits++;
+                    index++;
+                }
+
+                if (digits > 0 || escaped == '0')
+                {
+                    output.Append((char)(number & 0xff));
+                }
+                else
+                {
+                    output.Append("\\x");
+                }
+            }
+            else
+            {
+                output.Append(escaped switch
+                {
+                    '\\' => "\\",
+                    'a' => "\a",
+                    'b' => "\b",
+                    'e' => "\u001b",
+                    'f' => "\f",
+                    'n' => "\n",
+                    'r' => "\r",
+                    't' => "\t",
+                    'v' => "\v",
+                    _ => "\\" + escaped
+                });
+            }
+        }
+
+        return output.ToString();
     }
 }
 
@@ -85,11 +138,11 @@ public sealed class EnvironmentCommand : IDeviceCommand
 {
     public string Name => "env";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(
+        Task.FromResult<DeviceCommandResult>(
             "HOME=/root\nPATH=/bin:/sbin:/usr/bin\nSHELL=/bin/sh\nUSER=root");
 }
 
@@ -97,7 +150,7 @@ public sealed class ChangeDirectoryCommand : IDeviceCommand
 {
     public string Name => "cd";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken)
@@ -105,19 +158,19 @@ public sealed class ChangeDirectoryCommand : IDeviceCommand
         var target = arguments.Length == 0 ? "/root" : arguments[0];
         var path = context.ResolvePath(target);
 
-        return Task.FromResult<string?>(ChangeDirectory(target, path, context));
+        return Task.FromResult<DeviceCommandResult>(ChangeDirectory(target, path, context));
     }
 
-    private static string ChangeDirectory(string target, string path, CommandContext context)
+    private static DeviceCommandResult ChangeDirectory(string target, string path, CommandContext context)
     {
         if (context.FileSystem.Contains(path) && !context.FileSystem.IsDirectory(path))
         {
-            return $"sh: cd: {target}: Not a directory";
+            return new DeviceCommandResult($"sh: cd: {target}: Not a directory", 1);
         }
 
         return context.ChangeDirectory(path)
             ? string.Empty
-            : $"sh: cd: {target}: No such file or directory";
+            : new DeviceCommandResult($"sh: cd: {target}: No such file or directory", 1);
     }
 }
 
@@ -125,22 +178,22 @@ public sealed class FileCommand : IDeviceCommand
 {
     public string Name => "cat";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken)
     {
         if (arguments.Length != 1)
         {
-            return Task.FromResult<string?>("cat: usage: cat FILE");
+            return Task.FromResult(new DeviceCommandResult("cat: usage: cat FILE", 1));
         }
 
         var path = context.ResolvePath(arguments[0]);
-        var response = context.FileSystem.TryRead(path, out var value)
+        DeviceCommandResult response = context.FileSystem.TryRead(path, out var value)
             ? value.TrimEnd('\r', '\n')
-            : $"cat: {arguments[0]}: No such file or directory";
+            : new DeviceCommandResult($"cat: {arguments[0]}: No such file or directory", 1);
 
-        return Task.FromResult<string?>(response);
+        return Task.FromResult<DeviceCommandResult>(response);
     }
 }
 
@@ -148,26 +201,29 @@ public sealed class TouchCommand : IDeviceCommand
 {
     public string Name => "touch";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken)
     {
         if (arguments.Length == 0)
         {
-            return Task.FromResult<string?>("touch: missing file operand");
+            return Task.FromResult(new DeviceCommandResult("touch: missing file operand", 1));
         }
 
-        return Task.FromResult<string?>(TouchFiles(arguments, context));
+        return Task.FromResult<DeviceCommandResult>(TouchFiles(arguments, context));
     }
 
-    private static string TouchFiles(string[] paths, CommandContext context)
+    private static DeviceCommandResult TouchFiles(string[] paths, CommandContext context)
     {
         foreach (var path in paths)
         {
             if (!context.FileSystem.Touch(context.ResolvePath(path)))
             {
-                return $"touch: cannot touch '{path}': Is a directory";
+                var error = context.FileSystem.IsDirectory(context.ResolvePath(path))
+                    ? "Is a directory"
+                    : "No space left on device";
+                return new DeviceCommandResult($"touch: cannot touch '{path}': {error}", 1);
             }
         }
 
@@ -179,7 +235,7 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
 {
     public string Name => "mkdir";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken)
@@ -187,19 +243,22 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
         var paths = arguments.Where(argument => !argument.StartsWith('-')).ToArray();
         if (paths.Length == 0)
         {
-            return Task.FromResult<string?>("mkdir: missing operand");
+            return Task.FromResult(new DeviceCommandResult("mkdir: missing operand", 1));
         }
 
-        return Task.FromResult<string?>(CreateDirectories(paths, context));
+        return Task.FromResult<DeviceCommandResult>(CreateDirectories(paths, context));
     }
 
-    private static string CreateDirectories(string[] paths, CommandContext context)
+    private static DeviceCommandResult CreateDirectories(string[] paths, CommandContext context)
     {
         foreach (var path in paths)
         {
             if (!context.FileSystem.AddDirectory(context.ResolvePath(path)))
             {
-                return $"mkdir: cannot create directory '{path}': File exists";
+                var error = context.FileSystem.Contains(context.ResolvePath(path))
+                    ? "File exists"
+                    : "No space left on device";
+                return new DeviceCommandResult($"mkdir: cannot create directory '{path}': {error}", 1);
             }
         }
 
@@ -211,71 +270,45 @@ public sealed class RemoveCommand : IDeviceCommand
 {
     public string Name => "rm";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(
-            "rm: simulated device does not remove captured files");
+        Task.FromResult<DeviceCommandResult>(
+            new DeviceCommandResult("rm: simulated device does not remove captured files", 1));
 }
 
 public sealed class SystemInfoCommand : IDeviceCommand
 {
     public string Name => "uname";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(
+        Task.FromResult<DeviceCommandResult>(
             arguments.SequenceEqual(["-a"])
                 ? $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
                 : "Linux");
 }
 
-public sealed class BusyBoxCommand : IDeviceCommand
+public sealed class BusyBoxCommand(IReadOnlyDictionary<string, IDeviceCommand> commands) : IDeviceCommand
 {
     public string Name => "busybox";
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken)
     {
-        if (arguments.Length == 0)
+        if (arguments.Length == 0 || arguments[0] == "busybox")
         {
-            return Task.FromResult<string?>("BusyBox v1.19.4 (built-in shell commands)");
+            return Task.FromResult<DeviceCommandResult>("BusyBox v1.19.4 (built-in shell commands)");
         }
 
-        var applet = arguments[0];
-        var appletArguments = arguments.Skip(1).ToArray();
-        return Task.FromResult<string?>(GetAppletResponse(applet, appletArguments, context));
-    }
-
-    private static string GetAppletResponse(
-        string applet,
-        string[] arguments,
-        CommandContext context) =>
-        applet switch
-        {
-            "busybox" => "BusyBox v1.19.4 (built-in shell commands)",
-            "echo" => string.Join(' ', arguments),
-            "cat" when TryReadFile(arguments, context, out var contents) =>
-                contents.TrimEnd('\r', '\n'),
-            "uname" => $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
-            "wget" => DownloadCommand.Response("wget", arguments),
-            "true" or "false" or "sh" or "ls" or "mkdir" or "touch" => string.Empty,
-            _ => $"{applet}: applet not found"
-        };
-
-    private static bool TryReadFile(
-        string[] arguments,
-        CommandContext context,
-        out string contents)
-    {
-        contents = string.Empty;
-        return arguments.Length == 1 &&
-               context.FileSystem.TryRead(context.ResolvePath(arguments[0]), out contents);
+        return commands.TryGetValue(arguments[0], out var command)
+            ? command.ExecuteAsync(arguments[1..], context, cancellationToken)
+            : Task.FromResult(new DeviceCommandResult($"{arguments[0]}: applet not found", 127));
     }
 }
 
@@ -283,11 +316,12 @@ public sealed class DownloadCommand(string name) : IDeviceCommand
 {
     public string Name => name;
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(Response(Name, arguments));
+        Task.FromResult(new DeviceCommandResult(Response(Name, arguments),
+            PayloadDownloadAttemptParser.ParseArguments(Name, arguments).InformationOption is null ? 1 : 0));
 
     internal static string Response(string tool, string[] arguments)
     {
@@ -348,13 +382,13 @@ public sealed class DownloadCommand(string name) : IDeviceCommand
 
 public sealed class SimpleResponseCommand(
     string name,
-    Func<string[], CommandContext, string> response) : IDeviceCommand
+    Func<string[], CommandContext, DeviceCommandResult> response) : IDeviceCommand
 {
     public string Name => name;
 
-    public Task<string?> ExecuteAsync(
+    public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(response(arguments, context));
+        Task.FromResult<DeviceCommandResult>(response(arguments, context));
 }

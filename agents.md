@@ -171,6 +171,16 @@ wget curl reboot clear true false exit logout
 ```
 
 `touch` and `mkdir` mutate only the process-local virtual filesystem.
+The shell simulates single/double quoting, escaped characters, `;`, `&&`, and
+stdout redirection (`>` and `>>`), including redirection-only commands. `&&`
+continues only after a successful simulated command. Echo and `busybox echo`
+share `-e` escape decoding (including hexadecimal markers) and `-E` handling.
+Malformed syntax, pipelines, background jobs, descriptor redirection, and command
+substitution are rejected before any virtual filesystem changes. Variables,
+globs, and scripts are not expanded or executed. Each input is limited to 128
+commands and 4096 tokens in addition to `MaxLineLength`; aggregate responses use
+`MaxResponseLength`. The per-session virtual filesystem has at most 1024 entries,
+65536 characters per file, and 1048576 total content characters.
 `wget` and `curl` return usage errors for missing URLs and plausible network errors
 for supplied destinations; they never make network requests.
 Help (`--help`, `-h`) and version (`--version`, `-V`) requests return static output
