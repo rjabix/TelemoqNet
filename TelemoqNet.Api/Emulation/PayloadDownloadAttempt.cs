@@ -63,13 +63,9 @@ internal static class PayloadDownloadAttemptParser
     internal static (string? InformationOption, IReadOnlyList<string> Urls) ParseArguments(
         string tool, string[] arguments)
     {
-        var tokens = Tokenize(string.Join(' ', arguments))
-            .TakeWhile(token => token.Kind != TokenKind.Operator || token.Value is "<" or ">")
-            .ToList();
-
-        return tokens.Any(token => token.Kind == TokenKind.Incomplete)
-            ? (null, [])
-            : ParseArguments(tool, tokens, 0);
+        // These are already parsed shell words. Re-tokenizing would lose quoted
+        // spaces, option values, and URL query delimiters.
+        return ParseArguments(tool, arguments.Select(argument => new Token(argument)).ToList(), 0);
     }
 
     private static IEnumerable<PayloadDownloadAttempt> FindInCommand(List<Token> command)
@@ -80,6 +76,16 @@ internal static class PayloadDownloadAttemptParser
         }
 
         var index = 0;
+        while (index < command.Count && command[index].Kind == TokenKind.Operator && command[index].Value is ">" or "<")
+        {
+            index += 2;
+        }
+
+        if (index >= command.Count)
+        {
+            yield break;
+        }
+
         var tool = Path.GetFileName(command[index++].Value);
         if (tool == "busybox" && index < command.Count)
         {

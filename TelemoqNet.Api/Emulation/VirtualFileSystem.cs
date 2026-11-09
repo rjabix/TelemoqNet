@@ -2,16 +2,31 @@ namespace TelemoqNet.Api.Emulation;
 
 public sealed class VirtualFileSystem
 {
+    private const int MaxEntries = 1024;
+    private const int MaxFileLength = 65536;
+    private const int MaxTotalLength = 1048576;
+    private int _totalContentLength;
     private readonly Dictionary<string, VirtualFile> _files =
         new(StringComparer.Ordinal);
 
-    public void Add(VirtualFile file)
+    public bool Add(VirtualFile file)
     {
+        _files.TryGetValue(Normalize(file.Path), out var existing);
+        var previousLength = existing?.Contents.Length ?? 0;
+        if (file.Contents.Length > MaxFileLength ||
+            file.Contents.Length - previousLength > MaxTotalLength - _totalContentLength ||
+            _files.Count >= MaxEntries && !Contains(file.Path))
+        {
+            return false;
+        }
+
+        _totalContentLength += file.Contents.Length - previousLength;
         _files[Normalize(file.Path)] =
             file with
             {
                 Path = Normalize(file.Path)
             };
+        return true;
     }
 
     public bool Contains(string path) =>
@@ -30,8 +45,7 @@ public sealed class VirtualFileSystem
             return false;
         }
 
-        Add(new VirtualFile(normalized, string.Empty, IsDirectory: true));
-        return true;
+        return Add(new VirtualFile(normalized, string.Empty, IsDirectory: true));
     }
 
     public bool Touch(string path)
@@ -48,30 +62,47 @@ public sealed class VirtualFileSystem
             return true;
         }
 
-        Add(new VirtualFile(normalized, string.Empty));
-        return true;
+        return Add(new VirtualFile(normalized, string.Empty));
     }
 
-    public bool Append(string path, string contents)
+    public bool Append(string path, string contents) =>
+        Write(path, contents, append: true, out _);
+
+    public bool Write(string path, string contents, bool append, out string? error)
     {
         var normalized = Normalize(path);
-
-        if (_files.TryGetValue(normalized, out var file))
+        error = null;
+        if (IsDirectory(normalized))
         {
-            if (file.IsDirectory)
-            {
-                return false;
-            }
-
-            _files[normalized] = file with
-            {
-                Contents = file.Contents + contents
-            };
-            return true;
+            error = "Is a directory";
+            return false;
         }
 
-        Add(new VirtualFile(normalized, contents));
-        return true;
+        var parent = normalized[..normalized.LastIndexOf('/')];
+        if (!IsDirectory(parent))
+        {
+            error = "No such file or directory";
+            return false;
+        }
+
+        _files.TryGetValue(normalized, out var file);
+        var existing = append ? file?.Contents ?? string.Empty : string.Empty;
+        if (contents.Length > MaxFileLength - existing.Length ||
+            file is null && _files.Count >= MaxEntries)
+        {
+            error = "No space left on device";
+            return false;
+        }
+
+        var added = Add(file is null
+            ? new VirtualFile(normalized, contents)
+            : file with { Contents = existing + contents });
+        if (!added)
+        {
+            error = "No space left on device";
+        }
+
+        return added;
     }
 
     public IEnumerable<VirtualFile> ListEntries(string path)

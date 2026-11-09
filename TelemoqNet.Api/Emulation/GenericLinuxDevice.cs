@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using Microsoft.Extensions.Options;
 using TelemoqNet.Api.Configuration;
 
@@ -34,6 +35,11 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         Action<PayloadDownloadAttempt>? recordDownloadAttempt = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (command.Length > _options.MaxLineLength)
+        {
+            return Limit("sh: command limit exceeded");
+        }
+
         if (recordDownloadAttempt is not null)
         {
             foreach (var attempt in PayloadDownloadAttemptParser.Find(command))
@@ -43,7 +49,77 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         }
 
         await Task.Delay(_options.CommandLatencyMilliseconds, cancellationToken);
-        var args = ParseArguments(command);
+        if (!ShellCommandParser.TryParse(command, out var commands))
+        {
+            return Limit("sh: syntax error or command limit exceeded");
+        }
+
+        var output = new StringBuilder();
+        var wroteOutput = false;
+        var exitCode = 0;
+        foreach (var statement in commands)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (statement.RequiresSuccess && exitCode != 0)
+            {
+                continue;
+            }
+
+            var result = await ExecuteStatementAsync(statement, cancellationToken);
+            if (result.Output is null)
+            {
+                return null;
+            }
+
+            exitCode = result.ExitCode;
+            if ((result.Output.Length > 0 || result.EmitsEmptyLine) && output.Length <= _options.MaxResponseLength)
+            {
+                if (wroteOutput)
+                {
+                    output.Append('\n');
+                }
+
+                var remaining = Math.Max(0, _options.MaxResponseLength + 1 - output.Length);
+                output.Append(result.Output.AsSpan(0, Math.Min(remaining, result.Output.Length)));
+                wroteOutput = true;
+            }
+        }
+
+        return commands.Count == 0 ? string.Empty : Limit(output.ToString());
+    }
+
+    private async Task<DeviceCommandResult> ExecuteStatementAsync(
+        ShellCommand statement, CancellationToken cancellationToken)
+    {
+        string? destination = null;
+        foreach (var redirect in statement.Redirects)
+        {
+            destination = VirtualFileSystem.ResolvePath(_currentDirectory, redirect.Path);
+            if (redirect.Path.Length == 0)
+            {
+                return new DeviceCommandResult("sh: : No such file or directory", 1);
+            }
+
+            if (!_fileSystem.Write(destination, string.Empty, redirect.Append, out var error))
+            {
+                return new DeviceCommandResult($"sh: {redirect.Path}: {error}", 1);
+            }
+        }
+
+        var result = await ExecuteArgumentsAsync(statement.Arguments, cancellationToken);
+        if (destination is not null && result.ExitCode == 0 && result.Output is not null)
+        {
+            var contents = result.Output.Length == 0 && !result.EmitsEmptyLine ? string.Empty : result.Output + "\n";
+            return _fileSystem.Write(destination, contents, append: true, out var error)
+                ? new DeviceCommandResult(string.Empty)
+                : new DeviceCommandResult($"sh: {statement.Redirects[^1].Path}: {error}", 1);
+        }
+
+        return result;
+    }
+
+    private async Task<DeviceCommandResult> ExecuteArgumentsAsync(string[] args, CancellationToken cancellationToken)
+    {
         if (args.Length == 0)
         {
             return string.Empty;
@@ -52,23 +128,13 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
         var name = Path.GetFileName(args[0]);
         if (name is "exit" or "logout")
         {
-            return null;
+            return new DeviceCommandResult(null);
         }
 
-        if (!_commands.TryGetValue(name, out var handler))
-        {
-            return LimitUnknownCommand(name);
-        }
-
-        var result = await handler.ExecuteAsync(args.Skip(1).ToArray(), CreateCommandContext(), cancellationToken);
-        return result is null ? null : Limit(result);
+        return _commands.TryGetValue(name, out var handler)
+            ? await handler.ExecuteAsync(args[1..], CreateCommandContext(), cancellationToken)
+            : new DeviceCommandResult($"sh: {name}: not found", 127);
     }
-
-    private static string[] ParseArguments(string command) =>
-        command.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-    private string LimitUnknownCommand(string name) =>
-        Limit($"sh: {name}: not found");
 
     private CommandContext CreateCommandContext() =>
         new(
@@ -80,7 +146,7 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             ChangeDirectory,
             _options.Hostname);
 
-    private string ListFiles(string[] args)
+    private DeviceCommandResult ListFiles(string[] args)
     {
         var (showAll, longFormat, path) = ParseListArguments(args);
         var resolvedPath = VirtualFileSystem.ResolvePath(_currentDirectory, path);
@@ -90,7 +156,7 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
 
         if (entries.Length == 0 && !_fileSystem.IsDirectory(resolvedPath))
         {
-            return $"ls: {path}: No such file or directory";
+            return new DeviceCommandResult($"ls: {path}: No such file or directory", 1);
         }
 
         return FormatFileListing(entries, longFormat);
@@ -208,7 +274,6 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new MakeDirectoryCommand(),
             new RemoveCommand(),
             new SystemInfoCommand(),
-            new BusyBoxCommand(),
             new SimpleResponseCommand("pwd", (_, context) => context.CurrentDirectory),
             new SimpleResponseCommand("id", (_, _) => "uid=0(root) gid=0(root)"),
             new SimpleResponseCommand("whoami", (_, _) => "root"),
@@ -240,11 +305,13 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new SimpleResponseCommand("reboot", (_, context) => RebootAndRespond(context)),
             new SimpleResponseCommand("clear", (_, _) => "\u001b[2J\u001b[H"),
             new SimpleResponseCommand("true", (_, _) => string.Empty),
-            new SimpleResponseCommand("false", (_, _) => string.Empty),
+            new SimpleResponseCommand("false", (_, _) => new DeviceCommandResult(string.Empty, 1)),
             new SimpleResponseCommand("su", (_, _) => string.Empty)
         };
 
-        return commands.ToDictionary(command => command.Name, StringComparer.Ordinal);
+        var strategies = commands.ToDictionary(command => command.Name, StringComparer.Ordinal);
+        strategies.Add("busybox", new BusyBoxCommand(strategies));
+        return strategies;
     }
 
     private string RebootAndRespond(CommandContext context)

@@ -34,6 +34,12 @@ configuration, or the persistence schema.
 - Device commands are dispatched to explicit simulation strategies.
 - The virtual filesystem is process-local and path resolution cannot escape its
   simulated root.
+- Shell simulation accepts bounded quoting, `;`, `&&`, and stdout redirection
+  only. Unsupported operators and command substitutions are rejected before
+  mutation; no variables, globs, or scripts are expanded. Input is limited to 128
+  commands and 4096 tokens, and aggregate output respects `MaxResponseLength`.
+  Virtual writes are limited to 1024 entries, 65536 characters per file, and
+  1048576 total content characters per session.
 - `wget` and `curl` return plausible network errors and never create network
   requests. Passive inspection records `payload.download_attempt` events with
   tool, URL, and explicit `Executed=false` / `Downloaded=false` outcomes. No
