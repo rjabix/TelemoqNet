@@ -112,6 +112,12 @@ and retained replay are supported. Outgoing QoS 1 IDs remain in flight until PUB
 Queue or in-flight exhaustion closes the affected connection and records why.
 All session state is discarded at disconnect.
 
+Each `mqtt.subscribe` session event records the packet body length, packet ID,
+requested filter count, and the first 32 requested filters with their requested QoS.
+Filter text has control characters removed, is limited to 128 characters, and is
+JSON-escaped. `omittedFilters` counts requests beyond the capture limit, including
+requests rejected by the broker's subscription limit.
+
 Subscribe to `home/#` for simulated HG-200 gateway metadata and room readings, or
 `$SYS/#` for broker metrics. The same fictional device identity is available in
 Telnet at `/etc/device-release`. Profile publications are retained independently
