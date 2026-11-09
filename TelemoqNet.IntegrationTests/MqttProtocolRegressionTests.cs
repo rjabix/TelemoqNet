@@ -113,7 +113,9 @@ public sealed partial class MqttIntegrationTests
         await ConnectClientAsync(client, "malformed");
         await client.SendAsync([header, (byte)body.Length, .. body]);
         await client.ExpectClosedAsync();
-        Assert.Contains((await fixture.WaitForSessionAsync()).Events, e => e.Type == "protocol.error");
+        var session = await fixture.WaitForSessionAsync();
+        Assert.Contains(session.Events, e => e.Type == "protocol.error");
+        Assert.DoesNotContain(session.Events, e => e.Type == "mqtt.subscribe");
     }
 
     [Fact]

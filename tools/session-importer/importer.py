@@ -19,6 +19,11 @@ TABLES = ("Sessions", "Logins", "Commands", "Events", "PayloadChunks", "ImportSt
 FIELD_BYTES = 20_000
 BATCH_BYTES = 450_000
 MAX_NORMALIZED_ROWS = 20_000
+MAX_SOURCES = 50_000
+MAX_SOURCE_BYTES = 524_288_000
+MAX_INGESTION_BYTES = 1_048_576_000
+MAX_CHECKPOINT_BYTES = 5_000_000
+VERIFICATION_BATCH_SIZE = 1_000
 
 
 def encode(value):
@@ -82,10 +87,10 @@ class Config:
         if force not in ("true", "false"):
             raise ImportFailure("FORCE_REIMPORT must be true or false")
         return cls(start, end,
-                   positive(env, "MAX_BLOBS", "100", 10_000),
-                   positive(env, "MAX_SOURCE_BYTES", "10485760", 104_857_600),
+                   positive(env, "MAX_BLOBS", "100", MAX_SOURCES),
+                   positive(env, "MAX_SOURCE_BYTES", "10485760", MAX_SOURCE_BYTES),
                    positive(env, "MAX_BLOB_BYTES", "2097152", 8_388_608),
-                   positive(env, "MAX_INGESTION_BYTES", "20971520", 209_715_200),
+                   positive(env, "MAX_INGESTION_BYTES", "20971520", MAX_INGESTION_BYTES),
                    positive(env, "MAX_SECONDS", "240", 540), dry == "true", force == "true")
 
 
@@ -197,7 +202,7 @@ class Azure:
         self.scan_cursor = {}
         self.next_cursor = {}
         self.attempted_ingestion_bytes = 0
-        self.ingestion_limit = positive(env, "MAX_INGESTION_BYTES", "20971520", 209_715_200)
+        self.ingestion_limit = positive(env, "MAX_INGESTION_BYTES", "20971520", MAX_INGESTION_BYTES)
         self.storage = env["BLOB_ENDPOINT"].rstrip("/")
         self.ingestion = env["INGESTION_ENDPOINT"].rstrip("/")
         self.container = env["BLOB_CONTAINER"]
@@ -282,9 +287,9 @@ class Azure:
                 if total_pages > 200:
                     raise ScanLimit("listing page limit reached")
                 query = urllib.parse.urlencode(dict(restype="container", comp="list",
-                    prefix=day.strftime("%Y/%m/%d/"), maxresults="100", marker=marker))
+                    prefix=day.strftime("%Y/%m/%d/"), maxresults="1000", marker=marker))
                 body, _ = self.request(self.storage + "/" + self.container + "?" + query,
-                                       self.blob_headers(), max_bytes=500_000)
+                                       self.blob_headers(), max_bytes=5_000_000)
                 # Azure-generated XML only; reject declarations with entities.
                 if b"<!DOCTYPE" in body or b"<!ENTITY" in body:
                     raise ImportFailure("invalid listing XML")
@@ -317,8 +322,14 @@ class Azure:
     def delivered_many(self, runs):
         if not runs:
             return True
-        if len(runs) > 10_000:
+        if len(runs) > MAX_SOURCES:
             raise ImportFailure("verification manifest exceeds limit")
+        for offset in range(0, len(runs), VERIFICATION_BATCH_SIZE):
+            if not self.delivered_batch(runs[offset:offset + VERIFICATION_BATCH_SIZE]):
+                return False
+        return True
+
+    def delivered_batch(self, runs):
         workspace = str(uuid.UUID(self.env["WORKSPACE_CUSTOMER_ID"]))
         cells = ",".join("'" + str(uuid.UUID(r["runId"])) + "'," + str(int(r["expected"]) + 1) for r in runs)
         query = ("let expected=datatable(ImportRunId:string, Expected:long)[" + cells + "]; "
@@ -372,7 +383,7 @@ class Checkpoints:
 
     def get(self, key):
         try:
-            body, _ = self.azure.request(self.base + key, self.azure.blob_headers(), max_bytes=1_000_000)
+            body, _ = self.azure.request(self.base + key, self.azure.blob_headers(), max_bytes=MAX_CHECKPOINT_BYTES)
             return json.loads(body)
         except AzureHttpFailure as error:
             if error.status == 404:

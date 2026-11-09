@@ -171,7 +171,10 @@ wget curl reboot clear true false exit logout
 ```
 
 `touch` and `mkdir` mutate only the process-local virtual filesystem.
-`wget` and `curl` return plausible network errors and never make network requests.
+`wget` and `curl` return usage errors for missing URLs and plausible network errors
+for supplied destinations; they never make network requests.
+Help (`--help`, `-h`) and version (`--version`, `-V`) requests return static output
+without creating download-attempt events, including through `busybox wget`.
 Recognized downloader URL operands produce structured `payload.download_attempt`
 events with `Executed=false` and `Downloaded=false`; no payload samples are acquired.
 `rm` is intentionally non-destructive for now. Unsupported commands return a

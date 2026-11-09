@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using TelemoqNet.Api.Configuration;
@@ -13,6 +14,8 @@ namespace TelemoqNet.Api.Mqtt;
 
 public sealed class MqttSession : IAsyncDisposable, IBrokerClient
 {
+    private const int MaxCapturedSubscriptionFilters = 32;
+
     private readonly Stream _stream;
     private readonly ISessionStore _store;
     private readonly BrokerHub _hub;
@@ -520,7 +523,13 @@ public sealed class MqttSession : IAsyncDisposable, IBrokerClient
             return HandleProtocolError("empty_subscribe");
         }
 
-        AddEvent("mqtt.subscribe", packet.Body.Length.ToString());
+        // Capture requests (including those the broker may reject), without growing telemetry
+        // with every filter in a large packet. JSON escaping keeps filter delimiters unambiguous.
+        var filters = JsonSerializer.Serialize(requested.Take(MaxCapturedSubscriptionFilters)
+            .Select(subscription => new { filter = Sanitize(subscription.Filter), qos = subscription.Qos }));
+        var omitted = Math.Max(0, requested.Count - MaxCapturedSubscriptionFilters);
+        AddEvent("mqtt.subscribe",
+            $"length={packet.Body.Length},packetId={id},count={requested.Count},omittedFilters={omitted},filters={filters}");
         var result = _hub.Subscribe(this, requested);
         if (!Enqueue(MqttPacketWriter.SubAck(id, result.Results)))
         {

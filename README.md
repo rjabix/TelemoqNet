@@ -38,7 +38,10 @@ use that identity. `Honeypot:Hostname` overrides the hostname across both protoc
 Simulated `netstat` shows the device's public Telnet port 23 (the deployment maps
 it to application port 2323) and the configured MQTT port when MQTT is enabled.
 
-`wget`, `curl`, and `busybox wget` return a plausible network-unreachable error.
+`wget`, `curl`, and `busybox wget` support help (`--help`, `-h`) and version
+(`--version`, `-V`) output. Other invocations report a usage error when no URL is
+supplied; with a destination they return a plausible network-unreachable error.
+Help and version requests do not create download-attempt events.
 Recognized absolute HTTP(S), FTP, and TFTP URL operands produce ordered
 `payload.download_attempt` session events, for example:
 
@@ -108,6 +111,12 @@ Keepalive, QoS 0/1 Last Will, ordered per-filter SUBACK results, resubscription,
 and retained replay are supported. Outgoing QoS 1 IDs remain in flight until PUBACK.
 Queue or in-flight exhaustion closes the affected connection and records why.
 All session state is discarded at disconnect.
+
+Each `mqtt.subscribe` session event records the packet body length, packet ID,
+requested filter count, and the first 32 requested filters with their requested QoS.
+Filter text has control characters removed, is limited to 128 characters, and is
+JSON-escaped. `omittedFilters` counts requests beyond the capture limit, including
+requests rejected by the broker's subscription limit.
 
 Subscribe to `home/#` for simulated HG-200 gateway metadata and room readings, or
 `$SYS/#` for broker metrics. The same fictional device identity is available in

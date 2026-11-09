@@ -263,7 +263,7 @@ public sealed class BusyBoxCommand : IDeviceCommand
             "cat" when TryReadFile(arguments, context, out var contents) =>
                 contents.TrimEnd('\r', '\n'),
             "uname" => $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux",
-            "wget" => DownloadCommand.Response("wget"),
+            "wget" => DownloadCommand.Response("wget", arguments),
             "true" or "false" or "sh" or "ls" or "mkdir" or "touch" => string.Empty,
             _ => $"{applet}: applet not found"
         };
@@ -287,11 +287,63 @@ public sealed class DownloadCommand(string name) : IDeviceCommand
         string[] arguments,
         CommandContext context,
         CancellationToken cancellationToken) =>
-        Task.FromResult<string?>(Response(Name));
+        Task.FromResult<string?>(Response(Name, arguments));
 
-    internal static string Response(string tool) => tool == "wget"
-        ? "wget: can't connect to remote host: Network is unreachable"
-        : "curl: (7) Failed to connect to host: Network is unreachable";
+    internal static string Response(string tool, string[] arguments)
+    {
+        var parsed = PayloadDownloadAttemptParser.ParseArguments(tool, arguments);
+        if (parsed.InformationOption == "help")
+        {
+            return Help(tool);
+        }
+
+        if (parsed.InformationOption == "version")
+        {
+            return tool == "wget"
+                ? "BusyBox v1.19.4 (multi-call binary)"
+                : "curl 7.36.0 (mips-unknown-linux-gnu) libcurl/7.36.0\nProtocols: ftp http https tftp";
+        }
+
+        if (parsed.Urls.Count == 0)
+        {
+            return tool == "wget"
+                ? "wget: missing URL\nUsage: wget [OPTIONS] URL..."
+                : "curl: no URL specified!\ncurl: try 'curl --help' for more information";
+        }
+
+        return tool == "wget"
+            ? "wget: can't connect to remote host: Network is unreachable"
+            : "curl: (7) Failed to connect to host: Network is unreachable";
+    }
+
+    private static string Help(string tool) => tool == "wget"
+        ? """
+          BusyBox v1.19.4 (multi-call binary)
+          Usage: wget [OPTIONS] URL...
+
+          Retrieve files via HTTP or FTP
+            -q              Quiet
+            -O FILE         Save to FILE ('-' for stdout)
+            -P DIR          Save to DIR
+            -T SEC          Network timeout
+            -U STR          Use STR as User-Agent
+            --help          Show this help
+          """
+        : """
+          Usage: curl [options...] <url>
+           -d, --data DATA       HTTP POST data
+           -f, --fail            Fail on HTTP errors
+           -h, --help            Show this help
+           -H, --header LINE     Pass a custom header
+           -L, --location        Follow redirects
+           -o, --output FILE     Write output to FILE
+           -O, --remote-name     Use the remote file name
+           -s, --silent          Silent mode
+           -S, --show-error      Show errors in silent mode
+           -V, --version         Show version information
+               --url URL         URL to retrieve
+           -x, --proxy URL       Use a proxy
+          """;
 }
 
 public sealed class SimpleResponseCommand(

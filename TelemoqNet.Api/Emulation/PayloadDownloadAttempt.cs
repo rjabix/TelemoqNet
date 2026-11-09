@@ -60,6 +60,18 @@ internal static class PayloadDownloadAttemptParser
         }
     }
 
+    internal static (string? InformationOption, IReadOnlyList<string> Urls) ParseArguments(
+        string tool, string[] arguments)
+    {
+        var tokens = Tokenize(string.Join(' ', arguments))
+            .TakeWhile(token => token.Kind != TokenKind.Operator || token.Value is "<" or ">")
+            .ToList();
+
+        return tokens.Any(token => token.Kind == TokenKind.Incomplete)
+            ? (null, [])
+            : ParseArguments(tool, tokens, 0);
+    }
+
     private static IEnumerable<PayloadDownloadAttempt> FindInCommand(List<Token> command)
     {
         if (command.Count == 0)
@@ -79,8 +91,30 @@ internal static class PayloadDownloadAttemptParser
             yield break;
         }
 
+        var parsed = ParseArguments(tool, command, index);
+        if (parsed.InformationOption is not null)
+        {
+            yield break;
+        }
+
+        foreach (var value in parsed.Urls)
+        {
+            if (Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+                uri.Scheme is "http" or "https" or "ftp" or "tftp" &&
+                !string.IsNullOrEmpty(uri.Host))
+            {
+                yield return new PayloadDownloadAttempt(tool, value);
+            }
+        }
+    }
+
+    private static (string? InformationOption, IReadOnlyList<string> Urls) ParseArguments(
+        string tool, List<Token> command, int index)
+    {
         var valueOptions = tool == "wget" ? WgetValueOptions : CurlValueOptions;
         var endOfOptions = false;
+        string? informationOption = null;
+        var urls = new List<string>();
         for (; index < command.Count; index++)
         {
             var token = command[index];
@@ -113,19 +147,29 @@ internal static class PayloadDownloadAttemptParser
                     index++;
                     continue;
                 }
+                else if (value is "--help" or "-h")
+                {
+                    informationOption ??= "help";
+                    continue;
+                }
+                else if (value is "--version" or "-V")
+                {
+                    informationOption ??= "version";
+                    continue;
+                }
                 else if (value.StartsWith('-'))
                 {
                     continue;
                 }
             }
 
-            if (Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-                uri.Scheme is "http" or "https" or "ftp" or "tftp" &&
-                !string.IsNullOrEmpty(uri.Host))
+            if (!string.IsNullOrWhiteSpace(value))
             {
-                yield return new PayloadDownloadAttempt(tool, value);
+                urls.Add(value);
             }
         }
+
+        return (informationOption, urls);
     }
 
     private static IEnumerable<Token> Tokenize(string line)

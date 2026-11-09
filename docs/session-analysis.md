@@ -191,7 +191,7 @@ the scan cursor for that execution and incurs ingestion charges again.
 The persisted cursor includes the day, Azure listing marker and last name on
 that page. Finishing a sweep resets it, so subsequent sweeps discover late
 arrivals whose names sort before an earlier cursor. Each run permits at most
-200 listing pages. Count/source/ingestion budgets stop at a resumable boundary;
+200 listing pages of up to 1,000 blobs. Count/source/ingestion budgets stop at a resumable boundary;
 a single entity too large for the execution's entire ingestion budget requires
 raising that budget within the hard ceiling. Transport and authorization failures
 abort the run and keep pending receipts for recovery. Summaries include run ID,
@@ -231,13 +231,16 @@ alerts and Logs Ingestion remain separate; this estimate is not a total-cost
 promise. Existing ACR, private endpoints, DNS and VM costs remain in the base
 stack. Merely stopping job execution does not remove the load balancer.
 
-Defaults per execution: 1000 examined blobs, 10 MiB source, 2 MiB per source,
-20 MiB serialized ingestion attempts (including retries), 20,000 normalized rows
+Defaults per execution: 50,000 examined blobs, 500 MiB source, 2 MiB per source,
+1,000 MiB serialized ingestion attempts (including retries), 20,000 normalized rows
 per source, and 240 seconds in the saved job definition; the on-demand operator overrides
 the internal deadline to 540 seconds, below the platform's 600-second timeout.
 The importer stops admitting new sources with less than 30 seconds remaining,
 commits its cursor/manifest and allows the operator to continue safely in another
 batch. There are no platform retries. Overrides stay within hard-coded ceilings.
+Delivery verification queries check at most 1,000 source versions at a time;
+success requires verifying every group in the operation. These are upper
+bounds, so the deadline or byte budgets can still end a batch below 50,000 sources.
 
 Set `analysis_alert_emails` to enable an action group, importer/stale-delivery
 log alerts, failed-environment-deletion activity alerts, and a monthly **dedicated
