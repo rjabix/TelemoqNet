@@ -282,6 +282,18 @@ class ExecutionTests(unittest.TestCase):
             with self.assertRaises(app.ImportFailure):
                 app.Config.load(dict(env, **changes))
 
+    def test_large_backlog_limits_are_accepted_but_remain_bounded(self):
+        env = {"START_DATE": "2026-10-01", "END_DATE": "2026-10-31",
+               "MAX_BLOBS": "50000", "MAX_SOURCE_BYTES": "524288000",
+               "MAX_INGESTION_BYTES": "1048576000"}
+        loaded = app.Config.load(env)
+        self.assertEqual(loaded.max_blobs, 50_000)
+        self.assertEqual(loaded.max_source, 500 * 1024 * 1024)
+        self.assertEqual(loaded.max_ingestion, 1000 * 1024 * 1024)
+        for name in ("MAX_BLOBS", "MAX_SOURCE_BYTES", "MAX_INGESTION_BYTES"):
+            with self.subTest(name=name), self.assertRaises(app.ImportFailure):
+                app.Config.load(dict(env, **{name: str(int(env[name]) + 1)}))
+
 
 class TransportTests(unittest.TestCase):
     def azure(self):
@@ -331,6 +343,7 @@ class TransportTests(unittest.TestCase):
             blobs = list(azure.blobs(config()))
         self.assertEqual(blobs, [('2026/10/31/a.json', 12, '"one"'), ('2026/10/31/b.json', 20, '"two"')])
         self.assertIn('marker=next%2Bpage', request.call_args_list[1].args[0])
+        self.assertIn('maxresults=1000', request.call_args_list[0].args[0])
 
     def test_blob_read_is_conditional_on_listed_version(self):
         azure = self.azure()

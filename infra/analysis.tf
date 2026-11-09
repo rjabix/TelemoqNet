@@ -35,10 +35,10 @@ locals {
     START_DATE            = ""
     END_DATE              = ""
     DRY_RUN               = tostring(!var.analysis_auto_ingest_enabled)
-    MAX_BLOBS             = "1000"
-    MAX_SOURCE_BYTES      = "10485760"
+    MAX_BLOBS             = "50000"
+    MAX_SOURCE_BYTES      = "524288000"
     MAX_BLOB_BYTES        = "2097152"
-    MAX_INGESTION_BYTES   = "20971520"
+    MAX_INGESTION_BYTES   = "1048576000"
     MAX_SECONDS           = "240"
   } : {}
   analysis_queries = {

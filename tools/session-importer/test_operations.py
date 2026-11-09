@@ -7,6 +7,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import uuid
 from unittest.mock import patch
 
 import importer
@@ -76,6 +77,51 @@ class CheckpointTransportTests(unittest.TestCase):
         with patch.object(azure, 'token', return_value='synthetic'), patch.object(azure, 'request',
                 return_value=(json.dumps({'tables': [{'rows': [[1]]}]}).encode(), {})):
             self.assertTrue(azure.delivered_many(runs))
+
+    def test_large_manifest_is_readable_and_verified_in_bounded_queries(self):
+        azure, state = self.state()
+        azure.env['WORKSPACE_CUSTOMER_ID'] = '00000000-0000-0000-0000-000000000001'
+        runs = [{'runId': str(uuid.UUID(int=index + 1)), 'expected': 20_000}
+                for index in range(50_000)]
+        manifest = importer.encode({'state': 'Finished', 'runs': runs})
+        with patch.object(azure, 'blob_headers', return_value={}), patch.object(azure, 'request',
+                return_value=(manifest, {})) as request:
+            loaded = state.get('operations/synthetic.json')
+        self.assertLessEqual(len(manifest), request.call_args.kwargs['max_bytes'])
+        queries = []
+
+        def query_response(url, headers, data, **kwargs):
+            query = json.loads(data)['query']
+            queries.append(query)
+            return importer.encode({'tables': [{'rows': [[1000]]}]}), {}
+
+        with patch.object(azure, 'token', return_value='synthetic'), \
+                patch.object(azure, 'request', side_effect=query_response):
+            self.assertTrue(azure.delivered_many(loaded['runs']))
+        self.assertEqual(len(queries), 50)
+        for index, query in enumerate(queries):
+            expected = runs[index * 1000:(index + 1) * 1000]
+            cells = query.split(')[', 1)[1].split('];', 1)[0]
+            self.assertEqual(cells, ','.join("'" + run['runId'] + "',20001" for run in expected))
+
+    def test_incomplete_later_verification_batch_does_not_confirm_delivery(self):
+        azure, _ = self.state()
+        azure.env['WORKSPACE_CUSTOMER_ID'] = '00000000-0000-0000-0000-000000000001'
+        runs = [{'runId': str(uuid.UUID(int=index + 1)), 'expected': 4}
+                for index in range(1001)]
+        responses = [(importer.encode({'tables': [{'rows': [[count]]}]}), {})
+                     for count in (1000, 0)]
+        with patch.object(azure, 'token', return_value='synthetic'), \
+                patch.object(azure, 'request', side_effect=responses) as request:
+            self.assertFalse(azure.delivered_many(runs))
+        self.assertEqual(request.call_count, 2)
+
+    def test_oversized_verification_manifest_is_rejected_before_querying(self):
+        azure, _ = self.state()
+        with patch.object(azure, 'request') as request:
+            with self.assertRaisesRegex(importer.ImportFailure, 'manifest exceeds limit'):
+                azure.delivered_many([{}] * 50_001)
+        request.assert_not_called()
 
 
 class OperatorTests(unittest.TestCase):
