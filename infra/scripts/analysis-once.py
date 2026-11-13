@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +23,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import sqlite_export
 from importlib import util
 spec = util.spec_from_file_location("plan_guard", Path(__file__).with_name("check-analysis-plan.py"))
 guard = util.module_from_spec(spec)
@@ -479,6 +481,13 @@ def operation_result(group, job, execution, operation):
     raise RuntimeError('Verification succeeded but its bounded result could not be read; inspect the execution logs')
 
 
+def download_sqlite(args):
+    analysis = json.loads(terraform('output', '-json', 'analysis', capture=True))
+    if not analysis or not analysis.get('workspace_customer_id'):
+        raise RuntimeError('An existing analysis workspace is required for SQLite export')
+    sqlite_export.export_sqlite(analysis['workspace_customer_id'], args.sqlite, args.start, args.end)
+
+
 def main():
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(RuntimeError("Operation interrupted; cleaning up runtime")))
     parser = argparse.ArgumentParser(description=__doc__)
@@ -490,6 +499,10 @@ def main():
     parser.add_argument("--max-executions", type=int, default=10, help="Maximum bounded batches (stops early after a complete scan)")
     parser.add_argument("--dry-run-only", action="store_true")
     parser.add_argument("--cleanup-only", action="store_true", help="Finish a prior teardown without building an image or importing again")
+    parser.add_argument('--sqlite', nargs='?', const=str(ROOT / 'data/sessions.sqlite'), metavar='PATH',
+                        help='Download a SQLite database after import and cleanup (default: data/sessions.sqlite)')
+    parser.add_argument('--sqlite-only', action='store_true',
+                        help='Export already imported data with --sqlite, without setup, imports or runtime changes')
     args = parser.parse_args()
     if not 1 <= args.lookback_days <= 31 or not 1 <= args.max_executions <= 10:
         parser.error("lookback must be 1..31 days and max-executions must be 1..10")
@@ -498,9 +511,18 @@ def main():
     if not 0 <= (end - start).days <= 30:
         parser.error("date range must be inclusive and at most 31 days")
     args.start, args.end = start, end
-    args.var_file = str(Path(args.var_file).resolve(strict=True))
     if args.cleanup_only and args.dry_run_only:
         parser.error('--cleanup-only cannot be combined with --dry-run-only')
+    if args.sqlite_only and not args.sqlite:
+        parser.error('--sqlite-only requires --sqlite [PATH]')
+    if args.sqlite and (args.cleanup_only or args.dry_run_only):
+        parser.error('--sqlite cannot be combined with --cleanup-only or --dry-run-only')
+    if args.sqlite and Path(args.sqlite).expanduser().exists():
+        parser.error('SQLite destination already exists; choose a new filename')
+    if args.sqlite_only:
+        download_sqlite(args)
+        return
+    args.var_file = str(Path(args.var_file).resolve(strict=True))
     if not args.skip_setup and not args.cleanup_only:
         setup(Path(args.var_file))
     with ControlLock():
@@ -514,6 +536,8 @@ def main():
             return
         recover_pending_cleanup(args.var_file)
         execute(args)
+    if args.sqlite:
+        download_sqlite(args)
 
 
 def execute(args):
@@ -586,7 +610,7 @@ def execute(args):
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+    except (RuntimeError, ValueError, OSError, sqlite3.Error, subprocess.CalledProcessError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stderr:
             print(error.stderr[-3500:], file=sys.stderr)
         print("Analysis operation failed: " + str(error), file=sys.stderr)

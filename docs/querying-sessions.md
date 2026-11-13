@@ -200,6 +200,72 @@ Use `--output json` for structured results. The
 [Azure CLI query reference](https://learn.microsoft.com/en-us/cli/azure/monitor/log-analytics#az-monitor-log-analytics-query)
 describes query and time-range options.
 
+## Download a SQLite database
+
+The analysis script can save a single portable database on your computer.
+These commands are examples to run when ready:
+
+```bash
+# Import, verify delivery, remove runtime, then save data/sessions.sqlite.
+python3 infra/scripts/analysis-once.py --sqlite
+
+# Download data already in the workspace; no setup, import or runtime changes.
+python3 infra/scripts/analysis-once.py --sqlite-only --sqlite data/october.sqlite \
+  --start 2026-10-01 --end 2026-10-07
+```
+
+Azure CLI login, the initialized Terraform backend and workspace query permission
+are required. Export-only mode needs neither Docker nor the local tfvars file.
+The export uses the operator's identity and reads retained Log Analytics data;
+it does not connect to the private source storage. Only complete, deduplicated
+source versions are included, using the same selection logic as `HoneypotRows()`.
+Data not yet imported or past workspace retention is unavailable in this export.
+
+The date range uses original session start times, with both dates inclusive,
+and defaults to the last seven UTC days. All protocols and matching source
+versions are included; synthetic validation data is excluded. The exporter fixes
+an ingestion cutoff for its paged queries, checks the expected record count,
+and rejects API errors and partial results. This is a bounded export rather than
+a transactional workspace backup. An empty range produces an empty database.
+Each export is limited to 1,000,000 records (including chunks), a 1 GiB database
+and 200 records per query. Narrow the date range if a limit or query timeout occurs.
+
+Open the resulting file in any SQLite client, or use the CLI:
+
+```bash
+sqlite3 -readonly data/sessions.sqlite
+```
+
+```sql
+SELECT Protocol, count(*) AS Sessions
+FROM sessions GROUP BY Protocol;
+
+SELECT StartedAt, SourceAddress, Country, City, Command, Response
+FROM commands ORDER BY StartedAt DESC LIMIT 50;
+
+SELECT Type, count(*) AS Events
+FROM events GROUP BY Type ORDER BY Events DESC;
+
+SELECT Timestamp, json_extract(DownloadAttempt, '$.Url') AS Url
+FROM events WHERE Type = 'payload.download_attempt';
+```
+
+The file contains a `records` table with provenance, session IDs, timestamps,
+location metadata, payload JSON and original payload chunks; an
+`export_metadata` table records its workspace, export time, range and row count.
+The `sessions`, `logins`, `commands` and `events` views expose common payload
+fields as columns. Use SQLite JSON functions on `Payload` for other fields.
+Join records using `SourceBlob`, `SourceETag` and `ImportRunId` to preserve
+distinct source versions. Large payloads are reconstructed and SHA-256 verified
+before publication, so `Payload`, `Command` and `Response` contain full text
+even when `HasChunks` remains true. The original chunk records are retained.
+
+Exports can contain captured passwords and attacker input. Files are created
+with owner-only permissions and SQLite files are ignored by Git. An existing
+destination is never overwritten: choose a new filename for each export.
+A failed export does not publish a final database; failures after import do not
+repeat ingestion or leave runtime deployed. Retry with `--sqlite-only`.
+
 ## Location accuracy and full evidence
 
 Location is resolved at query time by Azure Monitor's built-in
