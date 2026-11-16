@@ -64,6 +64,16 @@ use that identity. `Honeypot:Hostname` overrides the hostname across both protoc
 Simulated `netstat` shows the device's public Telnet port 23 (the deployment maps
 it to application port 2323) and the configured MQTT port when MQTT is enabled.
 
+The simulated `/proc` exposes CPU, memory, kernel version, boot command line,
+uptime, load averages, and mounts. Its process directories match `ps`, and its
+network tables match the fake interfaces and configured listeners. Uptime
+advances within each Telnet session and resets on simulated `reboot`. Proc files
+are read-only; `/proc/self` is a fixed view of the fake shell, PID 42. For the
+supported paths and limits, see [procfs emulation](docs/procfs-emulation.md).
+`Honeypot:ProcfsEnabled` defaults to `true`. Set it to `false` (or set the
+environment variable `Honeypot__ProcfsEnabled=false`) to omit `/proc` and its
+mount entry. Shell commands cannot recreate the disabled directory.
+
 `wget`, `curl`, and `busybox wget` support help (`--help`, `-h`) and version
 (`--version`, `-V`) output. Other invocations report a usage error when no URL is
 supplied; with a destination they return a plausible network-unreachable error.

@@ -26,6 +26,8 @@ public sealed class HoneypotOptions
 
     public bool CapturePasswords { get; set; }
 
+    public bool ProcfsEnabled { get; set; } = true;
+
     public string Device { get; set; } = "GenericLinux";
 
     public string Banner { get; set; } = DeviceIdentity.Banner;
