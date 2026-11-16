@@ -20,6 +20,16 @@ existing `infra/terraform.tfvars`. From the repository root run:
 python3 infra/scripts/analysis-once.py
 ```
 
+To also save a portable SQLite database after successful import and runtime
+cleanup, append `--sqlite` (defaults to `data/sessions.sqlite`) or
+`--sqlite data/investigation.sqlite`. To download already imported data without
+setup or runtime changes, use `--sqlite-only --sqlite data/investigation.sqlite`.
+Both modes use the selected `--start`/`--end` dates (last seven UTC days by default)
+and require the operator's workspace query permission. See the
+[SQLite export guide](querying-sessions.md#download-a-sqlite-database) for schema,
+limits and local SQL examples. Export failure happens after runtime cleanup;
+retry with `--sqlite-only` without repeating ingestion.
+
 The same command performs first-time setup and subsequent imports: it validates
 the selected subscription and live state anchors, securely backs up local state
 and settings, recovers an empty local state from its intact validated backup if

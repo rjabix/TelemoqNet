@@ -42,6 +42,8 @@ The feature, runtime, and automatic ingestion are disabled by default. Use
 `python3 infra/scripts/analysis-once.py` from the repository root to handle
 backend setup/migration and importer publication automatically, then
 create runtime, validate/import new versions, verify delivery, and remove runtime.
+Append `--sqlite [PATH]` to download a database for local SQL queries after cleanup;
+`--sqlite-only --sqlite [PATH]` exports retained workspace data without runtime changes.
 The Portal Run now button is available while a job exists. A retained-runtime
 15-minute schedule is available separately and disabled by default.
 

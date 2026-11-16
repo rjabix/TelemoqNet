@@ -13,6 +13,32 @@ Status:
 | Telnet | Implemented (default port 2323) |
 | MQTT | MQTT 3.1.1, clean sessions, QoS 0/1 (default port 1883) |
 
+## SQLite export quick reference
+
+Run from the repository root after `az login`, with the existing deployment's
+Terraform backend initialized:
+
+```bash
+# Import new captures, verify delivery, remove runtime, and download SQLite.
+python3 infra/scripts/analysis-once.py --sqlite data/sessions.sqlite
+
+# Export already imported data without creating runtime or importing again.
+python3 infra/scripts/analysis-once.py --sqlite-only --sqlite data/sessions.sqlite
+
+# Export an inclusive UTC date range into a separate file.
+python3 infra/scripts/analysis-once.py --sqlite-only --sqlite data/october.sqlite \
+  --start 2026-10-01 --end 2026-10-07
+
+# Query the downloaded file locally.
+sqlite3 -readonly data/sessions.sqlite \
+  'SELECT StartedAt, SourceAddress, Command, Response FROM commands LIMIT 20;'
+```
+
+The default range is the last seven UTC days. Choose a new filename if the
+destination already exists. Available views: `sessions`, `logins`, `commands`,
+and `events`. See the [SQLite export guide](docs/querying-sessions.md#download-a-sqlite-database)
+for prerequisites, limits, schema details and more SQL examples.
+
 ## How it works
 
 1. A listener accepts TCP connections (limited by `Honeypot:MaxConnections`).
@@ -283,6 +309,10 @@ migration and the guarded analysis deployment automatically:
 ```bash
 python3 infra/scripts/analysis-once.py
 ```
+
+Add `--sqlite` to also download `data/sessions.sqlite` for local SQL queries,
+or use `--sqlite-only --sqlite data/sessions.sqlite` to export already imported
+data without creating runtime. See the [SQLite export guide](docs/querying-sessions.md#download-a-sqlite-database).
 
 It creates temporary runtime, dry-runs, imports new source versions, verifies
 delivery, and removes runtime. An optional retained-runtime schedule is also

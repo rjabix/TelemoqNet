@@ -4,19 +4,36 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: production-deploy
+  group: ${{ github.ref == 'refs/heads/main' && 'production-deploy' || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run integration tests
+        run: dotnet test TelemoqNet.IntegrationTests/TelemoqNet.IntegrationTests.csproj --configuration Release
+
   deploy:
+    needs: integration-tests
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: prod
+    permissions:
+      contents: read
+      id-token: write
     env:
       ACR_NAME: ${{ vars.ACR_NAME }}
       ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
