@@ -359,7 +359,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
     public ConcurrentBag<string> Logs { get; }
 
     public static async Task<TelnetFixture> StartAsync(
-        Action<HoneypotOptions>? configure = null, bool failPersistence = false)
+        Action<HoneypotOptions>? configure = null, bool failPersistence = false, TimeProvider? timeProvider = null)
     {
         var options = new HoneypotOptions
         {
@@ -369,7 +369,7 @@ internal sealed class TelnetFixture : IAsyncDisposable
         };
         configure?.Invoke(options);
 
-        var profileFactory = new TestProfileFactory(options);
+        var profileFactory = new TestProfileFactory(options, timeProvider);
         var sessionStore = new CapturingSessionStore { FailPersistence = failPersistence };
         var loggerProvider = new CapturingLoggerProvider();
         var loggerFactory = LoggerFactory.Create(builder =>
@@ -554,11 +554,11 @@ internal sealed class TelnetClient : IAsyncDisposable
     }
 }
 
-internal sealed class TestProfileFactory(HoneypotOptions options)
+internal sealed class TestProfileFactory(HoneypotOptions options, TimeProvider? timeProvider = null)
     : IDeviceProfileFactory
 {
     public IDeviceEmulator Create(string profileName) =>
-        new GenericLinuxDevice(Options.Create(options));
+        new GenericLinuxDevice(Options.Create(options), timeProvider);
 }
 
 internal sealed class CapturingSessionStore : ISessionStore

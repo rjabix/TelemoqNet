@@ -4,4 +4,5 @@ public sealed record VirtualFile(
     string Path,
     string Contents,
     bool IsExecutable = false,
-    bool IsDirectory = false);
+    bool IsDirectory = false,
+    bool IsReadOnly = false);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -10,14 +9,16 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
 {
     private readonly HoneypotOptions _options;
     private readonly VirtualFileSystem _fileSystem = new();
-    private readonly Stopwatch _uptime = Stopwatch.StartNew();
+    private readonly SimulatedLinuxState _state;
     private readonly Dictionary<string, IDeviceCommand> _commands;
     private string _currentDirectory = "/root";
 
-    public GenericLinuxDevice(IOptions<HoneypotOptions> options)
+    public GenericLinuxDevice(IOptions<HoneypotOptions> options, TimeProvider? timeProvider = null)
     {
         _options = options.Value;
+        _state = new SimulatedLinuxState(_options, timeProvider ?? TimeProvider.System);
         AddFiles();
+        ProcFileSystem.Register(_fileSystem, _state);
         _commands = CreateCommands();
     }
 
@@ -139,8 +140,8 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
     private CommandContext CreateCommandContext() =>
         new(
             _fileSystem,
-            FormatUptime,
-            () => Reboot(),
+            _state.FormatUptime,
+            _state.Reboot,
             () => _currentDirectory,
             path => VirtualFileSystem.ResolvePath(_currentDirectory, path),
             ChangeDirectory,
@@ -150,6 +151,11 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
     {
         var (showAll, longFormat, path) = ParseListArguments(args);
         var resolvedPath = VirtualFileSystem.ResolvePath(_currentDirectory, path);
+        if (_fileSystem.TryGetFile(resolvedPath, out var file) && !file!.IsDirectory)
+        {
+            return FormatFileListing([file], longFormat);
+        }
+
         var entries = _fileSystem.ListEntries(resolvedPath)
             .Where(entry => showAll || !Path.GetFileName(entry.Path).StartsWith('.'))
             .ToArray();
@@ -188,9 +194,18 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             ? string.Join(
                 '\n',
                 entries.Select(entry =>
-                    $"{(entry.IsDirectory ? "drwxr-xr-x" : "-rw-r--r--")} " +
+                    $"{FormatPermissions(entry)} " +
                     $"1 root root {entry.Contents.Length,8} {entry.Path}"))
             : string.Join('\n', entries.Select(entry => Path.GetFileName(entry.Path)));
+
+    private static string FormatPermissions(VirtualFile file) =>
+        (file.IsDirectory, file.IsReadOnly) switch
+        {
+            (true, true) => "dr-xr-xr-x",
+            (true, false) => "drwxr-xr-x",
+            (false, true) => "-r--r--r--",
+            (false, false) => "-rw-r--r--"
+        };
 
     private void AddFiles()
     {
@@ -203,7 +218,6 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new VirtualFile("/etc/config", string.Empty, IsDirectory: true),
             new VirtualFile("/home", string.Empty, IsDirectory: true),
             new VirtualFile("/home/admin", string.Empty, IsDirectory: true),
-            new VirtualFile("/proc", string.Empty, IsDirectory: true),
             new VirtualFile("/root", string.Empty, IsDirectory: true),
             new VirtualFile("/sbin", string.Empty, IsDirectory: true),
             new VirtualFile("/tmp", string.Empty, IsDirectory: true),
@@ -219,17 +233,12 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new VirtualFile("/etc/os-release", $"NAME=\"{DeviceIdentity.Model} Smart Home Gateway\"\nVERSION={DeviceIdentity.FirmwareVersion}\nID=embedded-linux\n"),
             new VirtualFile("/etc/issue", _options.Banner + "\n"),
             new VirtualFile("/etc/profile", "export PATH=/bin:/sbin:/usr/bin\n"),
-            new VirtualFile("/etc/resolv.conf", "nameserver 192.168.1.1\n"),
-            new VirtualFile("/etc/hosts", $"127.0.0.1 localhost\n192.168.1.1 {_options.Hostname}\n"),
-            new VirtualFile("/etc/mtab", "rootfs / rootfs rw 0 0\n"),
-            new VirtualFile("/etc/config/network", "config interface 'lan'\n\toption ipaddr '192.168.1.1'\n"),
+            new VirtualFile("/etc/resolv.conf", $"nameserver {SimulatedLinuxState.LanAddress}\n"),
+            new VirtualFile("/etc/hosts", $"{SimulatedLinuxState.LoopbackAddress} localhost\n{SimulatedLinuxState.LanAddress} {_options.Hostname}\n"),
+            new VirtualFile("/etc/mtab", _state.Mounts),
+            new VirtualFile("/etc/config/network", $"config interface 'lan'\n\toption ipaddr '{SimulatedLinuxState.LanAddress}'\n"),
             new VirtualFile("/etc/config/system", $"config system\n\toption hostname '{_options.Hostname}'\n\toption model '{DeviceIdentity.Model}'\n\toption firmware '{DeviceIdentity.FirmwareVersion}'\n"),
             new VirtualFile("/etc/config/mqtt", $"config mqtt\n\toption enabled '{(_options.Mqtt.Enabled ? 1 : 0)}'\n\toption port '{_options.Mqtt.Port}'\n\toption topic_prefix '{DeviceIdentity.MqttTopicPrefix}'\n"),
-            new VirtualFile("/proc/version", $"Linux version 2.6.36 (build@{_options.Hostname}) #1 SMP\n"),
-            new VirtualFile("/proc/cpuinfo", "system type\t\t: MediaTek SoC\nprocessor\t\t: 0\ncpu MHz\t\t: 580.000\n"),
-            new VirtualFile("/proc/meminfo", "MemTotal:          32768 kB\nMemFree:           18432 kB\n"),
-            new VirtualFile("/proc/uptime", "1036800.00 1030000.00\n"),
-            new VirtualFile("/proc/cmdline", "console=ttyS0,115200 root=/dev/mtdblock3 rw\n"),
             new VirtualFile("/var/log/messages", $"Jun 12 08:23:17 {_options.Hostname} daemon.info {DeviceIdentity.Model} firmware {DeviceIdentity.FirmwareVersion} started\n"),
             new VirtualFile("/var/log/auth.log", $"Jun 12 08:23:17 {_options.Hostname} auth.info login service ready\n"),
             new VirtualFile("/tmp/.keep", string.Empty),
@@ -279,26 +288,17 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
             new SimpleResponseCommand("whoami", (_, _) => "root"),
             new SimpleResponseCommand("hostname", (_, _) => _options.Hostname),
             new SimpleResponseCommand("ls", (arguments, _) => ListFiles(arguments)),
-            new SimpleResponseCommand("ifconfig", (_, _) => NetworkInfo(false)),
-            new SimpleResponseCommand("ip", (_, _) => NetworkInfo(true)),
-            new SimpleResponseCommand("ps",
-                (_, _) => "PID USER       COMMAND\n    1 root       init\n   23 root       telnetd\n" +
-                          (_options.Mqtt.Enabled ? "   31 root       mqttd\n" : string.Empty) +
-                          "   42 root       /bin/sh"),
-            new SimpleResponseCommand("netstat",
-                (_, _) =>
-                    "Active Internet connections\nProto Local Address           State\nTCP   0.0.0.0:23              LISTEN" +
-                    (_options.Mqtt.Enabled ? $"\nTCP   0.0.0.0:{_options.Mqtt.Port,-16}LISTEN" : string.Empty)),
+            new SimpleResponseCommand("ifconfig", (_, _) => _state.NetworkInfo(false)),
+            new SimpleResponseCommand("ip", (_, _) => _state.NetworkInfo(true)),
+            new SimpleResponseCommand("ps", (_, _) => _state.ProcessListing()),
+            new SimpleResponseCommand("netstat", (_, _) => _state.Netstat()),
             new SimpleResponseCommand("df",
                 (_, _) =>
                     "Filesystem           1K-blocks      Used Available Use% Mounted on\n/dev/root                 4096       768      3328  19% /"),
-            new SimpleResponseCommand("free",
-                (_, _) => "              total        used        free\nMem:          32768       14336       18432"),
-            new SimpleResponseCommand("mount",
-                (_, _) => "/dev/root on / type squashfs (ro)\nproc on /proc type proc (rw)"),
-            new SimpleResponseCommand("dmesg",
-                (_, _) => "[    0.000000] Linux version 2.6.36\n[    1.234000] eth0: link up"),
-            new SimpleResponseCommand("date", (_, _) => DateTime.UtcNow.ToString("ddd MMM d HH:mm:ss 'UTC' yyyy")),
+            new SimpleResponseCommand("free", (_, _) => _state.Free()),
+            new SimpleResponseCommand("mount", (_, _) => _state.MountListing()),
+            new SimpleResponseCommand("dmesg", (_, _) => _state.KernelMessages()),
+            new SimpleResponseCommand("date", (_, _) => _state.Date()),
             new SimpleResponseCommand("uptime", (_, context) => context.Uptime()),
             new DownloadCommand("wget"),
             new DownloadCommand("curl"),
@@ -317,23 +317,6 @@ public sealed class GenericLinuxDevice : IDeviceEmulator
     private string RebootAndRespond(CommandContext context)
     {
         context.Reboot();
-        return "Restarting system.";
-    }
-
-    private static string NetworkInfo(bool ip) => ip
-        ? "1: lo: <LOOPBACK,UP> mtu 65536\n    inet 127.0.0.1/8 scope host lo\n2: eth0: <BROADCAST,UP> mtu 1500\n    inet 192.168.1.1/24 scope global eth0"
-        : "eth0      Link encap:Ethernet  HWaddr 02:00:00:00:00:01\n          inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0\nlo        Link encap:Local Loopback  inet addr:127.0.0.1";
-
-    private string FormatUptime()
-    {
-        var elapsed = _uptime.Elapsed;
-        return
-            $" {DateTime.UtcNow:HH:mm:ss} up {elapsed.Days} days, {elapsed.Hours}:{elapsed.Minutes:00}, load average: 0.00, 0.01, 0.05";
-    }
-
-    private string Reboot()
-    {
-        _uptime.Restart();
         return "Restarting system.";
     }
 

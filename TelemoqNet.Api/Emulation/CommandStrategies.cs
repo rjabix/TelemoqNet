@@ -43,7 +43,7 @@ public sealed class HelpCommand : IDeviceCommand
         CancellationToken cancellationToken) =>
         Task.FromResult<DeviceCommandResult>(
             "Built-in commands: " +
-            "help echo env pwd ls cat touch mkdir rm uname id whoami hostname " +
+            "help echo env pwd cd ls cat touch mkdir rm uname id whoami hostname su " +
             "ifconfig ip ps netstat df free mount dmesg date uptime busybox " +
             "wget curl reboot clear true false exit logout");
 }
@@ -189,6 +189,11 @@ public sealed class FileCommand : IDeviceCommand
         }
 
         var path = context.ResolvePath(arguments[0]);
+        if (context.FileSystem.IsDirectory(path))
+        {
+            return Task.FromResult(new DeviceCommandResult($"cat: {arguments[0]}: Is a directory", 1));
+        }
+
         DeviceCommandResult response = context.FileSystem.TryRead(path, out var value)
             ? value.TrimEnd('\r', '\n')
             : new DeviceCommandResult($"cat: {arguments[0]}: No such file or directory", 1);
@@ -218,11 +223,8 @@ public sealed class TouchCommand : IDeviceCommand
     {
         foreach (var path in paths)
         {
-            if (!context.FileSystem.Touch(context.ResolvePath(path)))
+            if (!context.FileSystem.Touch(context.ResolvePath(path), out var error))
             {
-                var error = context.FileSystem.IsDirectory(context.ResolvePath(path))
-                    ? "Is a directory"
-                    : "No space left on device";
                 return new DeviceCommandResult($"touch: cannot touch '{path}': {error}", 1);
             }
         }
@@ -253,11 +255,8 @@ public sealed class MakeDirectoryCommand : IDeviceCommand
     {
         foreach (var path in paths)
         {
-            if (!context.FileSystem.AddDirectory(context.ResolvePath(path)))
+            if (!context.FileSystem.AddDirectory(context.ResolvePath(path), out var error))
             {
-                var error = context.FileSystem.Contains(context.ResolvePath(path))
-                    ? "File exists"
-                    : "No space left on device";
                 return new DeviceCommandResult($"mkdir: cannot create directory '{path}': {error}", 1);
             }
         }
@@ -285,11 +284,27 @@ public sealed class SystemInfoCommand : IDeviceCommand
     public Task<DeviceCommandResult> ExecuteAsync(
         string[] arguments,
         CommandContext context,
-        CancellationToken cancellationToken) =>
-        Task.FromResult<DeviceCommandResult>(
-            arguments.SequenceEqual(["-a"])
-                ? $"Linux {context.Hostname} 2.6.36 #1 SMP Thu Jun 12 08:23:17 UTC 2014 mips GNU/Linux"
-                : "Linux");
+        CancellationToken cancellationToken)
+    {
+        var flags = arguments.Length == 0 ? "s" : string.Concat(arguments.Select(argument => argument.TrimStart('-')));
+        if (flags.Length == 0 || arguments.Any(argument => !argument.StartsWith('-')) || flags.Any(flag => !"asnrvmo".Contains(flag)))
+        {
+            return Task.FromResult(new DeviceCommandResult("uname: unsupported option", 1));
+        }
+
+        var all = flags.Contains('a');
+        var fields = new (char Flag, string Value)[]
+        {
+            ('s', "Linux"),
+            ('n', context.Hostname),
+            ('r', SimulatedLinuxState.KernelVersion),
+            ('v', SimulatedLinuxState.KernelBuild),
+            ('m', SimulatedLinuxState.Architecture),
+            ('o', "GNU/Linux")
+        };
+        return Task.FromResult<DeviceCommandResult>(string.Join(' ', fields
+            .Where(field => all || flags.Contains(field.Flag)).Select(field => field.Value)));
+    }
 }
 
 public sealed class BusyBoxCommand(IReadOnlyDictionary<string, IDeviceCommand> commands) : IDeviceCommand
